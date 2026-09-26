@@ -5,33 +5,56 @@ Database manager implementation
 import sqlite3
 import logging
 import re
+import threading
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
+from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
 
 try:
-    import psycopg2
-    import psycopg2.extras
-    PSYCOPG2_AVAILABLE = True
+    import psycopg
+    from psycopg.rows import dict_row
+    PSYCOPG_AVAILABLE = True
 except ImportError:
-    PSYCOPG2_AVAILABLE = False
+    PSYCOPG_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
-# DatabaseInterfaceAdapter DELETED - DatabaseManager now handles everything directly
+# Matches a complete ``:name`` parameter token.
+#
+# The negative lookbehind excludes PostgreSQL ``::`` casts, so ``value::text``
+# is not mistaken for a parameter named ``text``. The greedy ``\w+`` matches
+# the whole name, so ``:id`` does not match the prefix of ``:id_org``.
+#
+# PostgreSQL is the canonical source dialect, so every backend has to read
+# ``:name`` the same way: a query that works against PostgreSQL must not be
+# reinterpreted somewhere else.
+PARAM_TOKEN = r'(?<!:):(\w+)'
 
 
 class DatabaseManager:
     """Database manager for handling database operations"""
 
-    def __init__(self, database_url_or_config):
+    def __init__(self, database_url_or_config, pool_min: int = 1,
+                 pool_max: int = 10, pool_timeout: float = 30.0,
+                 connect_timeout: float = 10.0):
         """
         Initialize DatabaseManager.
 
         Args:
             database_url_or_config: Either a database URL string or a ConnectionConfig object
+            pool_min: Connections opened eagerly when connecting
+            pool_max: Ceiling on concurrent connections. Set to 1 for the
+                single-connection behavior of earlier versions.
+            pool_timeout: Seconds to wait for a free connection before
+                raising PoolTimeout
+            connect_timeout: Seconds to wait for the pool to open when
+                connecting. Separate from pool_timeout so an unreachable
+                server is reported promptly rather than after a full
+                checkout timeout.
         """
         if isinstance(database_url_or_config, ConnectionConfig):
             self.config = database_url_or_config
@@ -39,9 +62,171 @@ class DatabaseManager:
         else:
             self.database_url = database_url_or_config
             self.config = ConnectionConfig.from_url(database_url_or_config)
-        self._connection = None
-        self._in_transaction = False
-        
+
+        self._pool_min = pool_min
+        self._pool_max = pool_max
+        self._pool_timeout = pool_timeout
+        self._connect_timeout = connect_timeout
+        self._pool: Optional[ConnectionPool] = None
+
+        # Per-thread connection and transaction state. A pool hands out
+        # several connections, so a manager-wide "in transaction" flag could
+        # not say which connection held the transaction. Each thread tracks
+        # its own, which also lets two threads run independent transactions
+        # through one manager.
+        self._state = threading.local()
+
+    # ------------------------------------------------------------------
+    # Per-thread connection state
+    # ------------------------------------------------------------------
+
+    @property
+    def _pinned(self):
+        """Connection this thread holds for a transaction, if any."""
+        return getattr(self._state, 'pinned', None)
+
+    @_pinned.setter
+    def _pinned(self, conn):
+        self._state.pinned = conn
+
+    @property
+    def _in_transaction(self) -> bool:
+        """True while this thread is inside an explicit transaction."""
+        return getattr(self._state, 'depth', 0) > 0
+
+    @property
+    def _connection(self):
+        """
+        Connection this thread is currently using.
+
+        Returns the pinned connection during a transaction, the one borrowed
+        for an in-flight operation if there is one, and otherwise checks one
+        out and keeps it for this thread.
+
+        That last case exists because callers reach for this directly to set
+        driver-level options such as ``autocommit``; returning None between
+        operations would break them. A connection held this way is returned
+        by ``disconnect()``.
+        """
+        if self._pinned is not None:
+            return self._pinned
+
+        current = getattr(self._state, 'current', None)
+        if current is not None:
+            return current
+
+        if self._pool is None:
+            return None
+
+        conn = self._pool.acquire(self._pool_timeout)
+        self._state.current = conn
+        self._state.held = True
+        return conn
+
+    @_connection.setter
+    def _connection(self, conn):
+        # Assigning None is how disconnect() clears state.
+        self._state.current = conn
+        if conn is None:
+            self._state.pinned = None
+
+    @contextmanager
+    def _borrow(self):
+        """
+        Yield a connection for one operation.
+
+        Inside a transaction this is the pinned connection and it is not
+        returned to the pool. Outside one, a connection is checked out and
+        released when the operation finishes.
+        """
+        if self._pinned is not None:
+            yield self._pinned
+            return
+
+        if self._pool is None:
+            raise RuntimeError("Database not connected; call connect() first")
+
+        # Reuse a connection the _connection property checked out for this
+        # thread, so reading that attribute and then running a query do not
+        # end up on two different connections.
+        held = getattr(self._state, 'held', False)
+        if held:
+            conn = self._state.current
+            release_when_done = False
+        else:
+            conn = self._pool.acquire(self._pool_timeout)
+            self._state.current = conn
+            release_when_done = True
+
+        discard = False
+        try:
+            yield conn
+        except Exception:
+            discard = self._is_connection_broken(conn)
+            raise
+        finally:
+            if release_when_done:
+                self._state.current = None
+                self._pool.release(conn, discard=discard)
+            elif discard:
+                # Held connection went bad: drop it so the next access gets
+                # a fresh one.
+                self._state.current = None
+                self._state.held = False
+                self._pool.release(conn, discard=True)
+
+    def _is_connection_broken(self, conn) -> bool:
+        """True if a failure left the connection unusable for the next caller."""
+        if self.config.database_type == DatabaseType.POSTGRESQL:
+            return bool(getattr(conn, 'closed', 0))
+        return False
+
+    @contextmanager
+    def transaction(self):
+        """
+        Run a block inside a database transaction.
+
+        Commits on clean exit, rolls back if the block raises. The connection
+        is pinned to the calling thread for the duration, so every statement
+        in the block runs on the same connection. Nested use joins the
+        outermost transaction rather than opening a second one.
+
+            with db.transaction():
+                db.execute("INSERT INTO ...")
+                db.execute("UPDATE ...")
+        """
+        if self._pinned is not None:
+            # Already inside a transaction on this thread: join it.
+            self._state.depth += 1
+            try:
+                yield self
+            finally:
+                self._state.depth -= 1
+            return
+
+        if self._pool is None:
+            raise RuntimeError("Database not connected; call connect() first")
+
+        conn = self._pool.acquire(self._pool_timeout)
+        self._state.pinned = conn
+        self._state.depth = 1
+        discard = False
+        try:
+            yield self
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                discard = True
+            raise
+        finally:
+            self._state.pinned = None
+            self._state.depth = 0
+            self._state.current = None
+            self._pool.release(conn, discard=discard)
+
+
     async def initialize(self, apply_schema: bool = True, app_migration_paths: Optional[List[str]] = None) -> bool:
         """
         Initialize the database connection and optionally apply schema migrations
@@ -91,112 +276,163 @@ class DatabaseManager:
             logger.error(f"Migration execution failed: {e}")
             return False
         
+    def _make_sqlite_connection(self):
+        """Open a SQLite connection."""
+        # Extract path from sqlite:///path or just use as path
+        if self.database_url.startswith("sqlite:///"):
+            db_path = self.database_url[10:]  # Remove "sqlite:///"
+        elif self.database_url.startswith("sqlite://"):
+            db_path = self.database_url[9:]   # Remove "sqlite://"
+        else:
+            db_path = self.database_url
+
+        # Create directory if it doesn't exist
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _make_mysql_connection(self):
+        """Open a MySQL connection."""
+        import pymysql
+        import pymysql.cursors
+        from urllib.parse import urlparse
+
+        # Parse the database URL
+        parsed = urlparse(self.database_url)
+
+        conn = pymysql.connect(
+            host=self.config.host or parsed.hostname or 'localhost',
+            port=self.config.port or parsed.port or 3306,
+            user=self.config.username or parsed.username,
+            password=self.config.password or parsed.password,
+            database=self.config.database_name or parsed.path.lstrip('/'),
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=False
+        )
+        return conn
+
+    def _make_mssql_connection(self):
+        """Open an MSSQL connection."""
+        import pyodbc
+        from urllib.parse import urlparse, parse_qs
+
+        # Check if this is a raw ODBC connection string (starts with DRIVER={...})
+        if self.database_url.startswith('DRIVER=') or self.database_url.startswith('Driver='):
+            # Raw ODBC connection string provided
+            conn = pyodbc.connect(self.database_url)
+        else:
+            # Parse the database URL (SQLAlchemy format: mssql+pyodbc://user:pass@host:port/db?driver=...)
+            parsed = urlparse(self.database_url)
+            query_params = parse_qs(parsed.query) if parsed.query else {}
+
+            # Get driver from query params or auto-detect
+            driver = None
+            if 'driver' in query_params:
+                driver = query_params['driver'][0]
+            else:
+                # Detect available driver (prefer 17 over 18, as 18 has TLS issues)
+                available_drivers = pyodbc.drivers()
+                for preferred in ['ODBC Driver 17 for SQL Server', 'ODBC Driver 18 for SQL Server', 'SQL Server']:
+                    if preferred in available_drivers:
+                        driver = preferred
+                        break
+
+            if not driver:
+                raise RuntimeError("No MSSQL ODBC driver found. Install ODBC Driver 17 or 18 for SQL Server")
+
+            # Build ODBC connection string
+            conn_str_parts = [
+                f"DRIVER={{{driver}}}",
+                f"SERVER={self.config.host or parsed.hostname or 'localhost'},{self.config.port or parsed.port or 1433}",
+                f"DATABASE={self.config.database_name or parsed.path.lstrip('/') or 'master'}",
+                f"UID={self.config.username or parsed.username}",
+                f"PWD={self.config.password or parsed.password}"
+            ]
+
+            # Add additional query params (like TrustServerCertificate)
+            for key, values in query_params.items():
+                if key.lower() != 'driver':  # Skip driver, already added
+                    conn_str_parts.append(f"{key}={values[0]}")
+
+            # If TrustServerCertificate not provided, add it by default
+            if 'TrustServerCertificate' not in query_params and 'trustservercertificate' not in query_params:
+                conn_str_parts.append("TrustServerCertificate=yes")
+
+            conn_str = ";".join(conn_str_parts)
+            logger.debug(f"MSSQL connection string: {conn_str!r}")
+            conn = pyodbc.connect(conn_str)
+
+        conn.autocommit = False
+        return conn
+
+    def _validate_connection(self, conn) -> bool:
+        """Cheap liveness check run when a pooled connection is checked out."""
+        try:
+            if self.config.database_type == DatabaseType.MYSQL:
+                conn.ping(reconnect=True)
+                return True
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchall()
+            return True
+        except Exception:
+            return False
+
     def connect(self) -> bool:
-        """Connect to the database"""
+        """
+        Build the connection pool.
+
+        SQLite gets a NullPool: its connections are bound to the creating
+        thread and the target is a local file, so pooling would break it
+        without buying throughput. The server backends get a real pool.
+        """
         try:
             if self.config.database_type == DatabaseType.SQLITE:
-                # Extract path from sqlite:///path or just use as path
-                if self.database_url.startswith("sqlite:///"):
-                    db_path = self.database_url[10:]  # Remove "sqlite:///"
-                elif self.database_url.startswith("sqlite://"):
-                    db_path = self.database_url[9:]   # Remove "sqlite://"
-                else:
-                    db_path = self.database_url
-
-                # Create directory if it doesn't exist
-                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
-                self._connection = sqlite3.connect(db_path)
-                self._connection.row_factory = sqlite3.Row
-                logger.info(f"Connected to SQLite database: {db_path}")
+                self._pool = NullPool(self._make_sqlite_connection)
+                # Surface connection errors here rather than on first query.
+                self._pool.acquire()
+                logger.info("Connected to SQLite database")
                 return True
 
             elif self.config.database_type == DatabaseType.POSTGRESQL:
-                if not PSYCOPG2_AVAILABLE:
-                    logger.error("psycopg2 not installed. Install with: pip install psycopg2-binary")
+                if not PSYCOPG_AVAILABLE:
+                    logger.error("psycopg not installed. Install with: pip install 'psycopg[binary,pool]'")
                     return False
 
                 logger.info(f"Connecting to PostgreSQL: {self.database_url}")
-                self._connection = psycopg2.connect(
+                self._pool = PostgresPool(
                     self.database_url,
-                    cursor_factory=psycopg2.extras.RealDictCursor
+                    min_size=self._pool_min,
+                    max_size=self._pool_max,
+                    timeout=self._pool_timeout,
+                    connect_timeout=self._connect_timeout,
+                    row_factory=dict_row,
                 )
-                self._connection.autocommit = False
-                logger.info(f"Connected to PostgreSQL database")
+                logger.info("Connected to PostgreSQL database")
                 return True
 
             elif self.config.database_type == DatabaseType.MYSQL:
-                import pymysql
-                import pymysql.cursors
-                from urllib.parse import urlparse
-
-                # Parse the database URL
-                parsed = urlparse(self.database_url)
-
-                self._connection = pymysql.connect(
-                    host=self.config.host or parsed.hostname or 'localhost',
-                    port=self.config.port or parsed.port or 3306,
-                    user=self.config.username or parsed.username,
-                    password=self.config.password or parsed.password,
-                    database=self.config.database_name or parsed.path.lstrip('/'),
-                    cursorclass=pymysql.cursors.DictCursor,
-                    autocommit=False
+                self._pool = GenericPool(
+                    self._make_mysql_connection,
+                    min_size=self._pool_min,
+                    max_size=self._pool_max,
+                    timeout=self._pool_timeout,
+                    validate=self._validate_connection,
                 )
-                logger.info(f"Connected to MySQL database")
+                logger.info("Connected to MySQL database")
                 return True
 
             elif self.config.database_type == DatabaseType.MSSQL:
-                import pyodbc
-                from urllib.parse import urlparse, parse_qs
-
-                # Check if this is a raw ODBC connection string (starts with DRIVER={...})
-                if self.database_url.startswith('DRIVER=') or self.database_url.startswith('Driver='):
-                    # Raw ODBC connection string provided
-                    self._connection = pyodbc.connect(self.database_url)
-                else:
-                    # Parse the database URL (SQLAlchemy format: mssql+pyodbc://user:pass@host:port/db?driver=...)
-                    parsed = urlparse(self.database_url)
-                    query_params = parse_qs(parsed.query) if parsed.query else {}
-
-                    # Get driver from query params or auto-detect
-                    driver = None
-                    if 'driver' in query_params:
-                        driver = query_params['driver'][0]
-                    else:
-                        # Detect available driver (prefer 17 over 18, as 18 has TLS issues)
-                        available_drivers = pyodbc.drivers()
-                        for preferred in ['ODBC Driver 17 for SQL Server', 'ODBC Driver 18 for SQL Server', 'SQL Server']:
-                            if preferred in available_drivers:
-                                driver = preferred
-                                break
-
-                    if not driver:
-                        raise RuntimeError("No MSSQL ODBC driver found. Install ODBC Driver 17 or 18 for SQL Server")
-
-                    # Build ODBC connection string
-                    conn_str_parts = [
-                        f"DRIVER={{{driver}}}",
-                        f"SERVER={self.config.host or parsed.hostname or 'localhost'},{self.config.port or parsed.port or 1433}",
-                        f"DATABASE={self.config.database_name or parsed.path.lstrip('/') or 'master'}",
-                        f"UID={self.config.username or parsed.username}",
-                        f"PWD={self.config.password or parsed.password}"
-                    ]
-
-                    # Add additional query params (like TrustServerCertificate)
-                    for key, values in query_params.items():
-                        if key.lower() != 'driver':  # Skip driver, already added
-                            conn_str_parts.append(f"{key}={values[0]}")
-
-                    # If TrustServerCertificate not provided, add it by default
-                    if 'TrustServerCertificate' not in query_params and 'trustservercertificate' not in query_params:
-                        conn_str_parts.append("TrustServerCertificate=yes")
-
-                    conn_str = ";".join(conn_str_parts)
-                    logger.debug(f"MSSQL connection string: {conn_str!r}")
-                    self._connection = pyodbc.connect(conn_str)
-
-                self._connection.autocommit = False
-                logger.info(f"Connected to MSSQL database")
+                self._pool = GenericPool(
+                    self._make_mssql_connection,
+                    min_size=self._pool_min,
+                    max_size=self._pool_max,
+                    timeout=self._pool_timeout,
+                    validate=self._validate_connection,
+                )
+                logger.info("Connected to MSSQL database")
                 return True
 
             else:
@@ -204,13 +440,18 @@ class DatabaseManager:
                 return False
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
+            self._pool = None
             return False
-    
+
     def disconnect(self):
-        """Disconnect from the database"""
-        if self._connection:
-            self._connection.close()
-            self._connection = None
+        """Close the pool and every connection in it"""
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
+            self._state.current = None
+            self._state.held = False
+            self._state.pinned = None
+            self._state.depth = 0
             logger.info("Disconnected from database")
     
     async def close(self):
@@ -302,14 +543,14 @@ class DatabaseManager:
             # Pattern: column::jsonb->>'key' → JSON_EXTRACT(column, '$.key')
             result = re.sub(r'(\w+(?:\.\w+)*)::jsonb->>\'(\w+)\'', r"JSON_EXTRACT(\1, '$.\2')", result)
 
-            # PostgreSQL type casting (::type) → remove for SQLite
-            # Examples: '{}'::jsonb, 'text'::varchar
+            # PostgreSQL type casting (::type) → remove for SQLite, which has
+            # no cast syntax and is loosely typed anyway.
+            # Examples: '{}'::jsonb, 'text'::varchar, id::int
             result = re.sub(r"'([^']*)'::jsonb", r"'\1'", result)
-            result = re.sub(r'::jsonb\b', '', result)
-            result = re.sub(r'::json\b', '', result)
-            result = re.sub(r'::varchar\b', '', result)
-            result = re.sub(r'::text\b', '', result)
-            result = re.sub(r'::uuid\b', '', result)
+            # Strip any ::type, not a fixed list of them. An unlisted cast
+            # would otherwise survive translation and reach SQLite as a
+            # syntax error, or be read as a :parameter.
+            result = re.sub(r'::\w+(\s*\[\s*\])?', '', result)
 
             # Remove SQL comments (-- style) before collapsing whitespace
             result = re.sub(r'--[^\n]*\n', '\n', result)
@@ -361,13 +602,11 @@ class DatabaseManager:
             result = re.sub(r'gen_random_uuid\(\)', 'UUID()', result)
             # NOW() works in MySQL, keep it
 
-            # PostgreSQL type casting (::type) → remove for MySQL
+            # PostgreSQL type casting (::type) → remove for MySQL.
+            # Strip any ::type, not a fixed list. An unlisted cast would
+            # otherwise survive translation and be read as a :parameter.
             result = re.sub(r"'([^']*)'::jsonb", r"'\1'", result)
-            result = re.sub(r'::jsonb\b', '', result)
-            result = re.sub(r'::json\b', '', result)
-            result = re.sub(r'::varchar\b', '', result)
-            result = re.sub(r'::text\b', '', result)
-            result = re.sub(r'::uuid\b', '', result)
+            result = re.sub(r'::\w+(\s*\[\s*\])?', '', result)
 
             # MySQL doesn't support CREATE INDEX IF NOT EXISTS
             # Remove IF NOT EXISTS from index creation
@@ -414,13 +653,11 @@ class DatabaseManager:
             result = re.sub(r'gen_random_uuid\(\)', 'NEWID()', result)
             result = re.sub(r'\bCURRENT_TIMESTAMP\b', 'GETDATE()', result)
 
-            # PostgreSQL type casting (::type) → CAST syntax
+            # PostgreSQL type casting (::type) → remove for MSSQL.
+            # Strip any ::type, not a fixed list. An unlisted cast would
+            # otherwise survive translation and be read as a :parameter.
             result = re.sub(r"'([^']*)'::jsonb", r"'\1'", result)
-            result = re.sub(r'::jsonb\b', '', result)
-            result = re.sub(r'::json\b', '', result)
-            result = re.sub(r'::varchar\b', '', result)
-            result = re.sub(r'::text\b', '', result)
-            result = re.sub(r'::uuid\b', '', result)
+            result = re.sub(r'::\w+(\s*\[\s*\])?', '', result)
 
             # MSSQL doesn't support ON DELETE SET NULL for self-referencing FKs with CASCADE
             # Change to NO ACTION to avoid conflicts
@@ -529,23 +766,22 @@ class DatabaseManager:
                 raise TypeError(f"Parameters must be a dict for {self.config.database_type}, got {type(params).__name__}")
 
         if self.config.database_type == DatabaseType.POSTGRESQL:
-            # PostgreSQL uses %(name)s format with dict
-            new_query = query
-            for key in params.keys():
-                new_query = new_query.replace(f":{key}", f"%({key})s")
+            # PostgreSQL uses %(name)s format with dict. Unknown :name
+            # tokens are left as-is.
+            new_query = re.sub(
+                PARAM_TOKEN,
+                lambda match: f"%({match.group(1)})s" if match.group(1) in params else match.group(0),
+                query
+            )
 
             # PostgreSQL handles Python bool natively - no conversion needed
-            # psycopg2 will convert True/False to PostgreSQL's TRUE/FALSE automatically
+            # psycopg converts True/False to PostgreSQL's TRUE/FALSE automatically
             return new_query, params
 
         elif self.config.database_type == DatabaseType.MYSQL:
-            # MySQL uses %s with positional tuple
-            # IMPORTANT: Build param_list in order of appearance in query, not dict iteration order
-            import re
-
-            # Find all :param_name patterns in query in order of appearance
-            param_pattern = r':(\w+)'
-            param_names_in_order = re.findall(param_pattern, query)
+            # MySQL uses %s with a positional tuple. Order the values by
+            # appearance in the query, not by dict iteration order.
+            param_names_in_order = re.findall(PARAM_TOKEN, query)
 
             # Build param list in query order
             param_list = []
@@ -558,18 +794,14 @@ class DatabaseManager:
                 param_list.append(value)
 
             # Replace all :param_name with %s in one pass
-            new_query = re.sub(param_pattern, '%s', query)
+            new_query = re.sub(PARAM_TOKEN, '%s', query)
 
             return new_query, tuple(param_list)
 
         elif self.config.database_type in [DatabaseType.SQLITE, DatabaseType.MSSQL]:
-            # SQLite and MSSQL use ? with positional tuple
-            # IMPORTANT: Build param_list in order of appearance in query, not dict iteration order
-            import re
-
-            # Find all :param_name patterns in query in order of appearance
-            param_pattern = r':(\w+)'
-            param_names_in_order = re.findall(param_pattern, query)
+            # SQLite and MSSQL use ? with a positional tuple. Order the
+            # values by appearance in the query, not by dict iteration order.
+            param_names_in_order = re.findall(PARAM_TOKEN, query)
 
             # Build param list in query order
             param_list = []
@@ -584,7 +816,7 @@ class DatabaseManager:
                     param_list.append(value)
 
             # Replace all :param_name with ? in one pass
-            new_query = re.sub(param_pattern, '?', query)
+            new_query = re.sub(PARAM_TOKEN, '?', query)
 
             return new_query, tuple(param_list)
 
@@ -593,27 +825,39 @@ class DatabaseManager:
 
     async def execute_async(self, query: str, params: Optional[Dict] = None) -> Any:
         """
-        Async-compatible execute method.
+        Execute a query without blocking the event loop.
+
+        Server backends run the blocking execute in a worker thread. SQLite
+        connections are thread-bound, so those queries run inline; the target
+        is a local file, so there is no network stall to offload.
 
         Args:
             query: SQL query with named parameters like :param_name
             params: Dict of parameters {"param_name": value}
         """
-        return self.execute(query, params)
+        import asyncio
+        if self.config.database_type == DatabaseType.SQLITE:
+            return self.execute(query, params)
+        return await asyncio.to_thread(self.execute, query, params)
 
 
-    def _execute_raw(self, query: str, params: Optional[Dict] = None):
+    def _execute_raw(self, query: str, params: Optional[Dict] = None,
+                     conn=None):
         """
         Internal method to execute query and return cursor.
 
         Args:
             query: SQL query with :param_name placeholders
             params: Dict like {"param_name": "value"}
+            conn: Connection to run on. Callers pass the one they borrowed so
+                the cursor and any follow-up commit share a connection.
 
         Returns:
             cursor object
         """
-        if not self._connection:
+        if conn is None:
+            conn = self._connection
+        if not conn:
             raise RuntimeError("Database not connected")
 
         # Translate SQL to target database dialect
@@ -622,7 +866,7 @@ class DatabaseManager:
         # Convert named params to database-specific format
         converted_query, converted_params = self._convert_params(translated_query, params)
 
-        cursor = self._connection.cursor()
+        cursor = conn.cursor()
         if converted_params:
             cursor.execute(converted_query, converted_params)
         else:
@@ -644,65 +888,113 @@ class DatabaseManager:
         Returns:
             List[Dict]: Query results (empty list for non-SELECT queries)
         """
-        try:
-            cursor = self._execute_raw(query, params)
+        self._reject_transaction_statement(query)
 
-            # Check if this is a query that returns results
-            query_upper = query.strip().upper()
-            is_select = query_upper.startswith('SELECT') or query_upper.startswith('SHOW') or query_upper.startswith('DESCRIBE')
-            # MSSQL INSERT/UPDATE/DELETE with OUTPUT clause returns results
-            has_output = 'OUTPUT' in query_upper and self.config.database_type == DatabaseType.MSSQL
-            # MSSQL EXEC can return results from stored procedures
-            is_exec = query_upper.startswith('EXEC') and self.config.database_type == DatabaseType.MSSQL
+        with self._borrow() as conn:
+            try:
+                cursor = self._execute_raw(query, params, conn)
 
-            if is_select or has_output or is_exec:
-                # Fetch results
-                rows = cursor.fetchall()
-                if not rows:
+                # Check if this is a query that returns results
+                query_upper = query.strip().upper()
+                is_select = query_upper.startswith('SELECT') or query_upper.startswith('SHOW') or query_upper.startswith('DESCRIBE')
+                # MSSQL INSERT/UPDATE/DELETE with OUTPUT clause returns results
+                has_output = 'OUTPUT' in query_upper and self.config.database_type == DatabaseType.MSSQL
+                # MSSQL EXEC can return results from stored procedures
+                is_exec = query_upper.startswith('EXEC') and self.config.database_type == DatabaseType.MSSQL
+
+                # INSERT/UPDATE/DELETE with RETURNING also produce result rows
+                has_returning = (not is_select
+                                 and re.search(r'\bRETURNING\b', query_upper) is not None)
+
+                if is_select or has_output or is_exec or has_returning:
+                    # Fetch results
+                    rows = cursor.fetchall()
+
+                    # Convert rows to dicts before any commit: SQLite refuses
+                    # to commit while a cursor still has statements in
+                    # progress, and the driver rows may not outlive it.
+                    if not rows:
+                        result = []
+                    elif self.config.database_type == DatabaseType.MSSQL:
+                        # pyodbc needs cursor.description for column names
+                        columns = [column[0] for column in cursor.description]
+                        result = [dict(zip(columns, row)) for row in rows]
+                    else:
+                        # SQLite and MySQL return dict-like rows
+                        result = [dict(row) for row in rows]
+
+                    if has_returning and not self._in_transaction:
+                        # The write already produced its rows; commit so the
+                        # data is durable rather than discarded when the
+                        # connection returns to the pool. Close the cursor
+                        # first: SQLite will not commit while a statement is
+                        # still in progress.
+                        cursor.close()
+                        conn.commit()
+
+                    return result
+                else:
+                    # Writes commit immediately unless the caller opened a
+                    # transaction, in which case transaction() owns the commit.
+                    if not self._in_transaction:
+                        conn.commit()
+
                     return []
 
-                # Convert rows to dicts
-                # For pyodbc (MSSQL), need to use cursor.description to get column names
-                if self.config.database_type == DatabaseType.MSSQL:
-                    columns = [column[0] for column in cursor.description]
-                    return [dict(zip(columns, row)) for row in rows]
-                else:
-                    # SQLite and MySQL return dict-like rows
-                    return [dict(row) for row in rows]
-            else:
-                # For INSERT/UPDATE/DELETE, handle transaction state
-                query_norm = query_upper.strip().rstrip(';').replace('  ', ' ')
-
-                # Track transaction state
-                if query_norm in ['BEGIN', 'BEGIN TRANSACTION', 'START TRANSACTION']:
-                    self._in_transaction = True
-                elif query_norm in ['COMMIT', 'COMMIT TRANSACTION']:
-                    self._in_transaction = False
-                    # Explicit commit
-                    self._connection.commit()
-                elif query_norm in ['ROLLBACK', 'ROLLBACK TRANSACTION']:
-                    self._in_transaction = False
-                    # Explicit rollback
-                    self._connection.rollback()
-                elif query_norm.startswith('SAVE TRANSACTION ') or query_norm.startswith('ROLLBACK TRANSACTION '):
-                    # Savepoint operations - don't end transaction, let database handle it
-                    pass
-                elif not self._in_transaction:
-                    # Auto-commit only when not in an explicit transaction
-                    self._connection.commit()
-
-                return []
-
-        except Exception as e:
-            # Rollback on error to clean up transaction state
-            if self._connection:
+            except Exception as e:
+                # Roll back so the connection is clean for the next caller.
+                # A failed statement leaves PostgreSQL in an aborted
+                # transaction state, and without this every later query on
+                # that pooled connection would fail too.
                 try:
-                    self._connection.rollback()
+                    conn.rollback()
                     logger.debug("Rolled back transaction after error")
                 except Exception:
                     pass  # Ignore rollback errors
-            logger.error(f"Query execution failed: {e}")
-            raise
+                logger.error(f"Query execution failed: {e}")
+                raise
+
+    # Statements that used to be intercepted by execute() to drive
+    # transactions. With a pool there is no single connection for them to
+    # act on, so they are rejected rather than silently sent to the driver,
+    # where they would open a transaction the manager does not track.
+    _TRANSACTION_STATEMENTS = {
+        'BEGIN', 'BEGIN TRANSACTION', 'START TRANSACTION',
+        'COMMIT', 'COMMIT TRANSACTION',
+        'ROLLBACK', 'ROLLBACK TRANSACTION',
+    }
+
+    def _reject_transaction_statement(self, query: str) -> None:
+        """Raise if the caller used the removed execute("BEGIN") protocol."""
+        normalized = query.strip().upper().rstrip(';').strip()
+        normalized = ' '.join(normalized.split())
+        if normalized in self._TRANSACTION_STATEMENTS:
+            raise RuntimeError(
+                f"execute({query.strip()!r}) is no longer supported. "
+                f"Use `with db.transaction():` instead."
+            )
+
+    def _is_write_statement(self, query: str) -> bool:
+        """Check whether a query is a write (DML) statement"""
+        query_upper = query.strip().upper()
+        return (query_upper.startswith('INSERT')
+                or query_upper.startswith('UPDATE')
+                or query_upper.startswith('DELETE')
+                or query_upper.startswith('MERGE')
+                or query_upper.startswith('REPLACE'))
+
+    def _commit_write_if_autocommit(self, query: str, conn):
+        """
+        Commit a write issued through the fetch_* methods.
+
+        An INSERT .. RETURNING run via fetch_one returns its row
+        without committing, so the write would be discarded when the
+        connection returns to the pool. Inside an explicit transaction the
+        caller owns the commit, so this does nothing.
+        """
+        if self._in_transaction or not self._is_write_statement(query):
+            return
+        conn.commit()
 
     def fetch_one(self, query: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
@@ -712,56 +1004,48 @@ class DatabaseManager:
             query: SQL with :param_name placeholders
             params: Dict like {"param_name": "value"}
         """
-        try:
-            cursor = self._execute_raw(query, params)
-            row = cursor.fetchone()
-            if not row:
-                return None
+        with self._borrow() as conn:
+            try:
+                cursor = self._execute_raw(query, params, conn)
+                row = cursor.fetchone()
+                self._commit_write_if_autocommit(query, conn)
+                if not row:
+                    return None
 
-            # Handle different cursor types
-            if self.config.database_type == DatabaseType.MSSQL:
-                # pyodbc Row object - convert to dict using column names
-                return {cursor.description[i][0]: row[i] for i in range(len(row))}
-            else:
-                # PostgreSQL/MySQL dict cursor or SQLite Row
-                return dict(row)
-        except Exception as e:
-            logger.error(f"fetch_one failed: {e}")
-            if self._connection:
+                # Handle different cursor types
+                if self.config.database_type == DatabaseType.MSSQL:
+                    # pyodbc Row object - convert to dict using column names
+                    return {cursor.description[i][0]: row[i] for i in range(len(row))}
+                else:
+                    # PostgreSQL/MySQL dict cursor or SQLite Row
+                    return dict(row)
+            except Exception as e:
+                logger.error(f"fetch_one failed: {e}")
                 try:
-                    self._connection.rollback()
+                    conn.rollback()
                 except Exception:
                     pass
-            return None
+                # Raise rather than returning None: a swallowed error is
+                # indistinguishable from "no row matched"
+                raise
 
-    def fetch_all(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
+    async def fetch_one_async(self, query: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
-        Fetch all rows with named parameters.
+        Fetch one row without blocking the event loop.
+
+        Server backends run the blocking fetch in a worker thread. SQLite
+        connections are thread-bound, so those queries run inline; the target
+        is a local file, so there is no network stall to offload.
 
         Args:
             query: SQL with :param_name placeholders
             params: Dict like {"param_name": "value"}
         """
-        try:
-            cursor = self._execute_raw(query, params)
-            rows = cursor.fetchall()
+        import asyncio
+        if self.config.database_type == DatabaseType.SQLITE:
+            return self.fetch_one(query, params)
+        return await asyncio.to_thread(self.fetch_one, query, params)
 
-            # Handle different cursor types
-            if self.config.database_type == DatabaseType.MSSQL:
-                # pyodbc Row objects - convert to dicts
-                return [{cursor.description[i][0]: row[i] for i in range(len(row))} for row in rows]
-            else:
-                # PostgreSQL/MySQL dict cursor or SQLite Row
-                return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"fetch_all failed: {e}")
-            if self._connection:
-                try:
-                    self._connection.rollback()
-                except Exception:
-                    pass
-            return []
-    
     def create_table(self, table_name: str, schema: str):
         """Create a table with the given schema"""
         query = f"CREATE TABLE IF NOT EXISTS {table_name} ({schema})"
@@ -803,12 +1087,9 @@ class DatabaseManager:
                 return result is not None
 
         except Exception as e:
+            # fetch_one already rolled back and released the
+            # connection, so there is nothing to clean up here.
             logger.error(f"table_exists failed: {e}")
-            if self.config.database_type in [DatabaseType.POSTGRESQL, DatabaseType.MYSQL, DatabaseType.MSSQL] and self._connection:
-                try:
-                    self._connection.rollback()
-                except:
-                    pass
             return False
 
     def _split_sql_statements(self, script: str) -> List[str]:
@@ -937,8 +1218,9 @@ class DatabaseManager:
 
             if self.config.database_type == DatabaseType.SQLITE:
                 # SQLite has executescript() which handles multiple statements
-                self._connection.executescript(translated_script)
-                self._connection.commit()
+                with self._borrow() as conn:
+                    conn.executescript(translated_script)
+                    conn.commit()
             else:
                 # For PostgreSQL/MySQL/MSSQL, execute statements one by one
                 statements = self._split_sql_statements(translated_script)
@@ -958,12 +1240,8 @@ class DatabaseManager:
 
             return QueryResult(success=True, data=[], row_count=0)
         except Exception as e:
+            # execute() rolls back and releases its own connection on error.
             logger.error(f"Script execution failed: {e}")
-            if self.config.database_type in [DatabaseType.POSTGRESQL, DatabaseType.MYSQL, DatabaseType.MSSQL] and self._connection:
-                try:
-                    self._connection.rollback()
-                except:
-                    pass
             return QueryResult(success=False, data=[], row_count=0, error_message=str(e))
 
     def __enter__(self):
