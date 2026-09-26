@@ -3,6 +3,7 @@ Database migration system for IA Modules.
 """
 
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -13,6 +14,15 @@ from .interfaces import DatabaseInterface, QueryResult
 
 
 logger = logging.getLogger(__name__)
+
+
+class MigrationChecksumMismatch(Exception):
+    """A previously applied migration file changed on disk."""
+
+
+def compute_checksum(path: Path) -> str:
+    """SHA-256 hex digest of a migration file's bytes."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 @dataclass
@@ -79,12 +89,12 @@ class MigrationRunner:
     
     async def get_applied_migrations(self) -> List[MigrationRecord]:
         """Get list of applied migrations for this migration type."""
-        result = self.database.fetch_all(
+        result = self.database.execute(
             f"SELECT version, filename, migration_type, description, applied_at, checksum FROM {self._migrations_table} WHERE migration_type = :migration_type ORDER BY version",
             {"migration_type": self.migration_type}
         )
 
-        # fetch_all returns a list directly
+        # execute returns a list of rows directly
         if not result:
             return []
 
@@ -159,8 +169,12 @@ class MigrationRunner:
                 logger.debug(f"Failed migration SQL preview: {migration_sql[:400]}")
                 return False
             
-            # Record migration
-            success = await self.record_migration(version, filename, migration_type, description)
+            # Record migration, with a checksum so later runs can detect the
+            # file being edited after it was applied
+            success = await self.record_migration(
+                version, filename, migration_type, description,
+                checksum=compute_checksum(migration_file),
+            )
             if not success:
                 logger.error(f"Failed to record migration {version}")
                 return False
@@ -208,13 +222,47 @@ class MigrationRunner:
         logger.info(f"Pending migrations to apply: {[f.name for f in migration_files]}")
         return migration_files
     
+    async def verify_checksums(self) -> None:
+        """
+        Refuse to run when an already-applied migration file has changed.
+
+        Editing a migration that has already run leaves databases that applied
+        the old version permanently out of step with ones applying the new,
+        with nothing to detect the difference later.
+
+        Migrations recorded without a checksum (applied before checksums were
+        written) cannot be verified and are skipped.
+        """
+        applied = {
+            m.version: m.checksum
+            for m in await self.get_applied_migrations()
+        }
+        if not self.migration_path.exists():
+            return
+
+        for migration_file in sorted(self.migration_path.glob("*.sql")):
+            version = migration_file.name.replace('.sql', '')
+            recorded = applied.get(version)
+            if not recorded:
+                continue
+            current = compute_checksum(migration_file)
+            if current != recorded:
+                raise MigrationChecksumMismatch(
+                    f"Migration {version} was applied with checksum "
+                    f"{recorded} but the file now hashes to {current}; "
+                    f"refusing to run migrations."
+                )
+
     async def run_pending_migrations(self) -> bool:
         """Run all pending migrations."""
         # Initialize migration table
         if not await self.initialize_migration_table():
             logger.error("Failed to initialize migration table")
             return False
-        
+
+        # Stop before applying anything if an already-applied file changed
+        await self.verify_checksums()
+
         # Get pending migrations
         pending_migrations = await self.get_pending_migrations()
         

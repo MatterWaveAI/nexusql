@@ -18,7 +18,7 @@ Multi-database abstraction layer with unified API for PostgreSQL, MySQL, SQLite,
 # SQLite only (no additional dependencies)
 pip install nexusql
 
-# With PostgreSQL support
+# With PostgreSQL support (sync and async, both via psycopg)
 pip install nexusql[postgresql]
 
 # With MySQL support
@@ -67,7 +67,7 @@ user = db.fetch_one(
 )
 
 # Fetch all rows
-all_users = db.fetch_all(
+all_users = db.execute(
     "SELECT * FROM users WHERE active = :active",
     {"active": True}
 )
@@ -78,6 +78,108 @@ db.execute(
     {"email": "new@example.com", "name": "John Doe"}
 )
 ```
+
+## Transactions
+
+Use `transaction()` as a context manager. It commits when the block finishes
+and rolls back if the block raises:
+
+```python
+with db.transaction():
+    db.execute("UPDATE accounts SET balance = balance - :amt WHERE id = :id",
+               {"amt": 100, "id": 1})
+    db.execute("UPDATE accounts SET balance = balance + :amt WHERE id = :id",
+               {"amt": 100, "id": 2})
+```
+
+Nesting joins the outermost transaction rather than opening a second one, so
+a helper that opens a transaction can safely be called from inside another.
+
+The transaction is scoped to the calling thread, so two threads can run
+independent transactions through the same manager.
+
+### Upgrading from 0.1.x
+
+PostgreSQL now uses psycopg (psycopg3) for both the sync and async paths,
+replacing psycopg2 and asyncpg. There is one PostgreSQL dependency instead of
+two, and the `postgres-async` extra is gone — `nexusql[postgresql]` covers
+both:
+
+```bash
+# 0.1.x
+pip install nexusql[postgresql]      # psycopg2, sync only
+pip install nexusql[postgres-async]  # asyncpg, async only
+
+# 0.2.0
+pip install nexusql[postgresql]      # psycopg, both
+```
+
+Query code is unaffected: `:name` parameters and PostgreSQL-canonical SQL work
+as before. Code reaching past the manager into `psycopg2` directly will need
+updating, since the connections it hands out are now psycopg connections.
+
+`fetch_all` has been removed. It returned exactly what `execute` returns for a
+SELECT, so callers move to `execute`:
+
+```python
+# 0.1.x
+rows = db.fetch_all("SELECT * FROM users WHERE active = :active", {"active": True})
+
+# 0.2.0
+rows = db.execute("SELECT * FROM users WHERE active = :active", {"active": True})
+```
+
+`fetch_one` stays, since `Optional[Dict]` is a genuinely different shape from a
+list, and it gains an async form, `fetch_one_async`.
+
+The string protocol for transactions has been removed. `execute("BEGIN")` and
+its counterparts now raise `RuntimeError` naming the replacement, rather than
+being passed to the driver where they would open a transaction the manager
+could not track:
+
+```python
+# 0.1.x
+db.execute("BEGIN")
+db.execute("INSERT ...")
+db.execute("COMMIT")
+
+# 0.2.0
+with db.transaction():
+    db.execute("INSERT ...")
+```
+
+## Connection Pooling
+
+Server backends are pooled, so concurrent callers get their own connections
+instead of serializing through one:
+
+```python
+db = DatabaseManager(
+    "postgresql://user:pass@localhost/mydb",
+    pool_min=1,         # connections opened when connecting
+    pool_max=10,        # ceiling on concurrent connections
+    pool_timeout=30,    # seconds to wait for a free connection
+    connect_timeout=10, # seconds to wait for the pool to open
+)
+```
+
+PostgreSQL uses psycopg's `ConnectionPool`. MySQL and MSSQL use a
+built-in pool, since their drivers ship none. Pooled connections are
+health-checked on checkout, so a connection dropped by a server restart or an
+idle timeout is replaced rather than handed to the caller.
+
+SQLite is deliberately not pooled: its connections are bound to the thread
+that created them, and the target is a local file with no network round-trip
+to overlap.
+
+`connect()` waits for the pool to open, so an unreachable server is reported
+there (returning `False`) rather than surfacing later on an unrelated query.
+It is separate from `pool_timeout` so a slow checkout budget does not make
+startup failures slow to detect.
+
+Set `pool_max=1` for the single-connection behavior of earlier versions.
+Exhausting the pool raises `PoolTimeout` after `pool_timeout` seconds rather
+than blocking indefinitely.
 
 ## SQL Translation
 
@@ -172,6 +274,61 @@ finally:
 await db.close()
 ```
 
+## Async Backend
+
+The sync `DatabaseManager` blocks: calling it from inside `async def` code
+(FastAPI routes, SSE streams) stalls the whole event loop. For async
+applications use `AsyncPostgresBackend` — async end to end, with a connection
+pool and connection checking on checkout. It uses the same driver as the sync
+path, so the `postgresql` extra covers both.
+
+```python
+from nexusql import AsyncPostgresBackend
+
+db = AsyncPostgresBackend(
+    "postgresql://user:pass@localhost:5432/mydb",
+    min_pool_size=1,
+    max_pool_size=10,
+)
+await db.connect()
+
+# Named parameters work exactly like the sync manager: :name becomes
+# psycopg's %(name)s on both paths, with :: casts never read as parameters.
+result = await db.fetch_one(
+    "SELECT id FROM users WHERE email = :email", {"email": "a@b.c"})
+if result.success:
+    print(result.data[0])
+
+# Writes outside an explicit transaction are durable immediately; SELECT and
+# INSERT .. RETURNING return their rows in result.data.
+created = await db.execute(
+    "INSERT INTO users (email) VALUES (:email) RETURNING id",
+    {"email": "a@b.c"})
+
+# Explicit transaction (commits on clean exit, rolls back on error)
+async with db.transaction():
+    await db.execute("INSERT INTO users (email) VALUES (:email)",
+                     {"email": "x@y.z"})
+
+# The sync manager's BEGIN/COMMIT/ROLLBACK statement protocol works too and
+# pins one pooled connection for the duration.
+await db.execute("BEGIN")
+await db.execute("INSERT INTO users (email) VALUES (:email)", {"email": "x@y.z"})
+await db.execute("COMMIT")
+
+print(await db.health_check())
+await db.disconnect()
+
+```
+
+Result conventions mirror the sync manager: `fetch_one`/`execute`/
+`execute_async` raise on query errors, since a loud failure beats silently
+missing rows. `execute_script` returns `QueryResult` with `success=False` on
+failure.
+
+The package still imports (sync-only) when the extra is not installed;
+`nexusql.ASYNCPG_AVAILABLE` tells you which world you are in.
+
 ## Checking Table Existence
 
 ```python
@@ -265,10 +422,10 @@ Initialize database and optionally apply migrations.
 Execute query with named parameters. Returns list of dicts for SELECT, empty list for INSERT/UPDATE/DELETE.
 
 #### `fetch_one(query, params=None) -> Optional[Dict]`
-Fetch single row with named parameters.
+Fetch single row with named parameters. `None` means the query succeeded and matched no rows; errors raise.
 
-#### `fetch_all(query, params=None) -> List[Dict]`
-Fetch all rows with named parameters.
+#### `async fetch_one_async(query, params=None) -> Optional[Dict]`
+Same as `fetch_one`, run in a worker thread for server backends so it does not block the event loop.
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.

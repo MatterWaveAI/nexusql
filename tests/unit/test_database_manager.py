@@ -171,25 +171,39 @@ class TestDatabaseMigrations:
         db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_migration_tracking(self):
-        """Test that migrations are tracked properly"""
+    async def test_migration_tracking(self, tmp_path):
+        """An applied migration is recorded in ia_migrations with its metadata.
+
+        The migration comes from a directory this test owns. It used to rely on
+        ``nexusql/migrations/``, which shipped an application schema inside a
+        generic library; c569e17 deleted it and the test kept asserting rows
+        appeared, so it failed on an empty table. A library that ships no
+        migrations of its own is the intended state -- what matters is that a
+        migration handed to it is applied once and recorded.
+        """
+        migrations = tmp_path / "migrations"
+        migrations.mkdir()
+        (migrations / "V001__create_widget.sql").write_text(
+            "CREATE TABLE widget (id INTEGER PRIMARY KEY, name TEXT);"
+        )
+
         config = ConnectionConfig(
             database_type=DatabaseType.SQLITE,
             database_url="sqlite://:memory:"
         )
         db = DatabaseManager(config)
-        await db.initialize(apply_schema=True)
+        await db.initialize(apply_schema=True, app_migration_paths=[str(migrations)])
 
-        # Check applied migrations
         rows = db.execute("SELECT * FROM ia_migrations ORDER BY version")
+        assert len(rows) == 1
 
-        # Should have migrations from system migrations directory
-        assert len(rows) > 0
+        applied = rows[0]
+        assert "version" in applied
+        assert "filename" in applied
+        assert "applied_at" in applied
+        assert applied["filename"] == "V001__create_widget.sql"
 
-        # Check that migration records have required fields
-        first_migration = rows[0]
-        assert "version" in first_migration
-        assert "filename" in first_migration
-        assert "applied_at" in first_migration
+        # The migration actually ran, not just got recorded.
+        assert db.table_exists("widget") is True
 
         db.disconnect()

@@ -3,6 +3,7 @@ NexusQL - Multi-database abstraction layer with unified API
 """
 
 from .manager import DatabaseManager
+from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool, PoolTimeout
 from .interfaces import (
     ConnectionConfig,
     DatabaseType,
@@ -12,13 +13,33 @@ from .interfaces import (
     create_error_result
 )
 
-__version__ = "0.1.0"
+from .migrations import MigrationRunner, MigrationChecksumMismatch
+
+try:
+    from .async_backend import PSYCOPG_AVAILABLE
+    if PSYCOPG_AVAILABLE:
+        from .async_backend import AsyncPostgresBackend
+except ImportError:  # postgresql extra not installed: sync-only package
+    PSYCOPG_AVAILABLE = False
+
+__version__ = "0.2.0"
+
 __all__ = [
     'DatabaseManager',
+    'ConnectionPool',
+    'GenericPool',
+    'NullPool',
+    'PostgresPool',
+    'PoolTimeout',
     'ConnectionConfig',
     'DatabaseType',
     'QueryResult',
     'DatabaseInterface',
     'create_query_result',
-    'create_error_result'
+    'create_error_result',
+    'MigrationRunner',
+    'MigrationChecksumMismatch',
 ]
+
+if PSYCOPG_AVAILABLE:
+    __all__ += ['AsyncPostgresBackend']
