@@ -22,7 +22,7 @@ try:
 except ImportError:  # postgresql extra not installed: sync-only package
     PSYCOPG_AVAILABLE = False
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     'DatabaseManager',
