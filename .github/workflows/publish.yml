@@ -30,6 +30,24 @@ jobs:
       - name: Check package
         run: twine check dist/*
 
+      # Publish to the Gitea registry on every tag, before the PyPI step. This is the
+      # dev index the other packages already use, and it is what makes a build
+      # installable without a public release. PyPI stays gated on a token being set.
+      - name: Publish to the Gitea package registry
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        env:
+          # The built-in token does not carry package:write on this Gitea, so
+          # publishing needs one created for the purpose.
+          TWINE_USERNAME: ${{ secrets.PKG_REGISTRY_USER }}
+          TWINE_PASSWORD: ${{ secrets.PKG_REGISTRY_PASSWORD }}
+          TWINE_REPOSITORY_URL: http://localhost:3000/api/packages/MatterWaveAI-dev/pypi
+        run: |
+          if [ -n "$TWINE_PASSWORD" ]; then
+            python -m twine upload --non-interactive --verbose dist/*
+          else
+            echo "::warning::PKG_REGISTRY_PASSWORD not set; skipping the Gitea publish"
+          fi
+
       - name: Publish to PyPI
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
