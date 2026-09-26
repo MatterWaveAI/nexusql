@@ -69,7 +69,8 @@ def db(db_config):
         ensure_mssql_database_exists(db_config.database_url)
 
     manager = DatabaseManager(db_config)
-    manager.connect()
+    if not manager.connect():
+        pytest.skip(f"{db_config.database_type.value} not available")
 
     # Clean up test tables
     for table in ['test_orders', 'test_products', 'test_users']:

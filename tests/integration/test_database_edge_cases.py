@@ -7,7 +7,7 @@ Tests for issues not covered by existing test suites:
 - Empty string vs NULL
 - Boolean parameters
 - Unicode and special characters
-- fetch_one() and fetch_all() with various data types
+- fetch_one() and execute() with various data types
 """
 
 import pytest
@@ -213,7 +213,7 @@ def test_unicode_and_special_characters(db):
         )
 
     # Verify all were inserted correctly
-    results = db.fetch_all("SELECT * FROM test_unicode ORDER BY id")
+    results = db.execute("SELECT * FROM test_unicode ORDER BY id")
     assert len(results) == len(test_strings)
     for i, result in enumerate(results):
         assert result['unicode_text'] == test_strings[i]
@@ -253,7 +253,7 @@ def test_fetch_one_with_mssql(db):
 
 
 def test_fetch_all_with_mssql(db):
-    """Test fetch_all() works correctly with MSSQL dict conversion"""
+    """Test execute() works correctly with MSSQL dict conversion"""
     try:
         db.execute("DROP TABLE IF EXISTS test_fetch_all")
     except:
@@ -274,8 +274,8 @@ def test_fetch_all_with_mssql(db):
             {'id': i, 'cat': f'cat_{i}', 'score': i * 10}
         )
 
-    # Test fetch_all returns list of dicts
-    results = db.fetch_all("SELECT * FROM test_fetch_all ORDER BY id")
+    # Test execute returns list of dicts
+    results = db.execute("SELECT * FROM test_fetch_all ORDER BY id")
     assert len(results) == 3
     assert all(isinstance(r, dict) for r in results)
 
@@ -284,8 +284,8 @@ def test_fetch_all_with_mssql(db):
         assert result['category'] == f'cat_{i}'
         assert result['score'] == i * 10
 
-    # Test fetch_all returns empty list when no matches
-    results = db.fetch_all("SELECT * FROM test_fetch_all WHERE id > :id", {'id': 999})
+    # Test execute returns empty list when no matches
+    results = db.execute("SELECT * FROM test_fetch_all WHERE id > :id", {'id': 999})
     assert results == []
 
 
@@ -355,7 +355,7 @@ def test_parameter_with_quotes_and_special_chars(db):
         )
 
     # Verify all were inserted correctly
-    results = db.fetch_all("SELECT * FROM test_special_chars ORDER BY id")
+    results = db.execute("SELECT * FROM test_special_chars ORDER BY id")
     assert len(results) == len(special_strings)
     for i, result in enumerate(results):
         assert result['text_data'] == special_strings[i]

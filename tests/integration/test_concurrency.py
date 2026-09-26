@@ -146,7 +146,7 @@ class TestConcurrentReads:
             db = DatabaseManager(db_config)
             db.connect()
             try:
-                results = db.fetch_all("SELECT * FROM test_concurrent_workers ORDER BY iteration")
+                results = db.execute("SELECT * FROM test_concurrent_workers ORDER BY iteration")
                 return len(results)
             finally:
                 db.disconnect()
@@ -264,7 +264,7 @@ class TestConcurrentWrites:
         # Verify all updates succeeded
         db = DatabaseManager(db_config)
         db.connect()
-        rows = db.fetch_all("SELECT * FROM test_concurrent_workers ORDER BY worker_id")
+        rows = db.execute("SELECT * FROM test_concurrent_workers ORDER BY worker_id")
         db.disconnect()
 
         assert len(rows) == 10

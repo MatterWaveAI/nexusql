@@ -46,7 +46,7 @@ class TestQueryPerformance:
         # Measure SELECT performance
         start = time.time()
         for _ in range(100):
-            rows = db.fetch_all("SELECT * FROM test WHERE value < :limit", {"limit": 100})
+            rows = db.execute("SELECT * FROM test WHERE value < :limit", {"limit": 100})
         elapsed = time.time() - start
 
         # Should be fast (< 1 second for 100 queries)
@@ -208,7 +208,7 @@ class TestLargeDatasets:
 
         # Query performance
         start = time.time()
-        rows = db.fetch_all("SELECT * FROM large_table WHERE id < :limit", {"limit": 1000})
+        rows = db.execute("SELECT * FROM large_table WHERE id < :limit", {"limit": 1000})
         elapsed = time.time() - start
 
         assert len(rows) == 999  # ids 1-999
@@ -226,7 +226,7 @@ class TestLargeDatasets:
 
         # Fetch all rows
         start = time.time()
-        rows = db.fetch_all("SELECT * FROM test")
+        rows = db.execute("SELECT * FROM test")
         elapsed = time.time() - start
 
         assert len(rows) == 10000
@@ -312,7 +312,7 @@ class TestMemoryEfficiency:
         # Fetch in chunks (to test chunking if implemented)
         total_rows = 0
         for offset in range(0, 10000, 1000):
-            rows = db.fetch_all(
+            rows = db.execute(
                 "SELECT * FROM test LIMIT :limit OFFSET :offset",
                 {"limit": 1000, "offset": offset}
             )
@@ -441,7 +441,7 @@ class TestComplexQueries:
 
         # Measure JOIN performance
         start = time.time()
-        rows = db.fetch_all("""
+        rows = db.execute("""
             SELECT u.name, COUNT(o.id) as order_count, SUM(o.amount) as total
             FROM users u
             JOIN orders o ON u.id = o.user_id
@@ -469,7 +469,7 @@ class TestComplexQueries:
 
         # Subquery
         start = time.time()
-        rows = db.fetch_all("""
+        rows = db.execute("""
             SELECT category, AVG(value) as avg_value
             FROM test
             WHERE value > (SELECT AVG(value) FROM test)

@@ -156,7 +156,7 @@ class TestSecondOrderInjection:
         stored_email = user["email"]
 
         # Now use stored email in another query (potential second-order injection)
-        result = db.fetch_all(
+        result = db.execute(
             "SELECT * FROM users WHERE email = :email",
             {"email": stored_email}
         )

@@ -305,7 +305,7 @@ class TestBinaryMultipleRows:
                 {'name': filename, 'data': data, 'size': len(data)}
             )
 
-        results = db_manager.fetch_all("SELECT * FROM test_binary_files ORDER BY filename")
+        results = db_manager.execute("SELECT * FROM test_binary_files ORDER BY filename")
         assert len(results) == 3
 
         for i, result in enumerate(results):
@@ -332,7 +332,7 @@ class TestBinaryMultipleRows:
             )
 
         # Query files larger than 50 bytes
-        results = db_manager.fetch_all(
+        results = db_manager.execute(
             "SELECT * FROM test_binary_files WHERE size > :min_size ORDER BY size",
             {'min_size': 50}
         )

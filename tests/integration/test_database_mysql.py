@@ -28,7 +28,8 @@ def mysql_config():
 def mysql_db(mysql_config):
     """Create a MySQL database manager for testing"""
     db = DatabaseManager(mysql_config)
-    db.connect()
+    if not db.connect():
+        pytest.skip("MySQL not available (server unreachable or pymysql not installed)")
 
     # Clean up test tables
     test_tables = [
@@ -226,11 +227,9 @@ class TestMySQLTransactions:
             ) ENGINE=InnoDB
         ''')
 
-        # Start transaction (implicitly with first statement)
-        mysql_db.execute("START TRANSACTION")
-        mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
-        mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
-        mysql_db.execute("COMMIT")
+        with mysql_db.transaction():
+            mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
+            mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
 
         result = mysql_db.execute("SELECT COUNT(*) as count FROM test_transactions")
         assert result[0]['count'] == 2
@@ -244,9 +243,13 @@ class TestMySQLTransactions:
             ) ENGINE=InnoDB
         ''')
 
-        mysql_db.execute("START TRANSACTION")
-        mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
-        mysql_db.execute("ROLLBACK")
+        class _Abort(Exception):
+            pass
+
+        with pytest.raises(_Abort):
+            with mysql_db.transaction():
+                mysql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
+                raise _Abort()
 
         result = mysql_db.execute("SELECT COUNT(*) as count FROM test_transactions")
         assert result[0]['count'] == 0

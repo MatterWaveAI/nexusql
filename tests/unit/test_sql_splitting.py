@@ -207,7 +207,7 @@ class TestExecuteScriptIntegration:
         assert result.success is True
 
         # Verify data was inserted correctly
-        rows = db.fetch_all("SELECT * FROM test_users ORDER BY id")
+        rows = db.execute("SELECT * FROM test_users ORDER BY id")
         assert len(rows) == 2
         assert rows[0]['name'] == 'John'
         assert rows[0]['bio'] == 'Loves SQL; programming'
@@ -249,7 +249,7 @@ class TestExecuteScriptIntegration:
         assert result.success is True
 
         # Verify data was inserted correctly
-        rows = db.fetch_all("SELECT * FROM test_users_script ORDER BY id")
+        rows = db.execute("SELECT * FROM test_users_script ORDER BY id")
         assert len(rows) == 2
         assert rows[0]['name'] == 'John'
         assert rows[0]['bio'] == 'Loves SQL; programming'
@@ -296,7 +296,7 @@ class TestExecuteScriptIntegration:
         assert result.success is True
 
         # Verify data was inserted correctly
-        rows = db.fetch_all("SELECT * FROM test_users_script ORDER BY id")
+        rows = db.execute("SELECT * FROM test_users_script ORDER BY id")
         assert len(rows) == 2
         assert rows[0]['name'] == 'John'
         assert rows[0]['bio'] == 'Loves SQL; programming'
@@ -343,7 +343,7 @@ class TestExecuteScriptIntegration:
         assert result.success is True
 
         # Verify data was inserted correctly
-        rows = db.fetch_all("SELECT * FROM test_users_script ORDER BY id")
+        rows = db.execute("SELECT * FROM test_users_script ORDER BY id")
         assert len(rows) == 2
         assert rows[0]['name'] == 'John'
         assert rows[0]['bio'] == 'Loves SQL; programming'

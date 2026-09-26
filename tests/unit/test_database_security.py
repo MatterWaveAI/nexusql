@@ -14,6 +14,7 @@ prevent common security vulnerabilities.
 """
 
 import pytest
+import sqlite3
 from nexusql import DatabaseManager, ConnectionConfig, DatabaseType
 
 
@@ -87,7 +88,7 @@ class TestSQLInjectionPrevention:
         assert row is None
 
         # Verify users still exist (not deleted by injection)
-        all_users = secure_db.fetch_all("SELECT * FROM users")
+        all_users = secure_db.execute("SELECT * FROM users")
         assert len(all_users) == 2
 
     def test_sql_injection_with_comments(self, secure_db):
@@ -108,7 +109,7 @@ class TestSQLInjectionPrevention:
         # UNION attack to extract sensitive data
         malicious_input = "' UNION SELECT id, secret_value, 1, 1 FROM sensitive_data --"
 
-        rows = secure_db.fetch_all(
+        rows = secure_db.execute(
             "SELECT * FROM users WHERE username = :username",
             {"username": malicious_input}
         )
@@ -130,7 +131,7 @@ class TestSQLInjectionPrevention:
         assert row is None
 
         # Verify table was NOT dropped
-        users = secure_db.fetch_all("SELECT * FROM users")
+        users = secure_db.execute("SELECT * FROM users")
         assert len(users) == 2
 
     def test_sql_injection_in_update(self, secure_db):
@@ -163,7 +164,7 @@ class TestSQLInjectionPrevention:
         assert isinstance(result, list)  # execute() returns list
 
         # Verify only one user was inserted (with the malicious string as username)
-        all_users = secure_db.fetch_all("SELECT * FROM users")
+        all_users = secure_db.execute("SELECT * FROM users")
         assert len(all_users) == 3  # 2 original + 1 new
 
         # Verify no user with id=999 was created
@@ -175,7 +176,7 @@ class TestSQLInjectionPrevention:
         # Attempt to use wildcards to leak data: %
         malicious_input = "%"
 
-        rows = secure_db.fetch_all(
+        rows = secure_db.execute(
             "SELECT * FROM users WHERE username = :username",
             {"username": malicious_input}
         )
@@ -397,13 +398,13 @@ class TestParameterSanitization:
     def test_parameter_type_coercion(self, secure_db):
         """Test that parameter types are handled safely"""
         # Pass dict where string expected
-        result = secure_db.fetch_one(
-            "SELECT * FROM users WHERE username = :username",
-            {"username": {"OR": "1=1"}}
-        )
-
-        # Should handle gracefully (convert to string or reject)
-        # Should not execute the SQL injection
+        # The library rejects unsupported parameter types by raising (B-003):
+        # a loud failure, never a silent None that looks like "no row"
+        with pytest.raises(sqlite3.Error):
+            secure_db.fetch_one(
+                "SELECT * FROM users WHERE username = :username",
+                {"username": {"OR": "1=1"}}
+            )
 
     def test_parameter_escaping(self, secure_db):
         """Test that parameters are properly escaped"""
@@ -515,7 +516,7 @@ class TestConcurrentAccessSecurity:
                (not result1_success and result2_success)
 
         # Verify only one user with that username exists
-        users = secure_db.fetch_all(
+        users = secure_db.execute(
             "SELECT * FROM users WHERE username = :username",
             {"username": "duplicate"}
         )

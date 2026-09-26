@@ -185,7 +185,7 @@ class TestQueryOptimization:
 
         # Query without covering index
         start = time.time()
-        db.fetch_all("SELECT col1, col2 FROM test WHERE col1 = :val", {"val": "value_100"})
+        db.execute("SELECT col1, col2 FROM test WHERE col1 = :val", {"val": "value_100"})
         no_covering_time = time.time() - start
 
         # Create covering index (includes all queried columns)
@@ -193,7 +193,7 @@ class TestQueryOptimization:
 
         # Query with covering index
         start = time.time()
-        db.fetch_all("SELECT col1, col2 FROM test WHERE col1 = :val", {"val": "value_100"})
+        db.execute("SELECT col1, col2 FROM test WHERE col1 = :val", {"val": "value_100"})
         covering_time = time.time() - start
 
         print(f"\nWithout covering index: {no_covering_time*1000:.2f}ms")
@@ -279,7 +279,7 @@ class TestMemoryManagement:
         mem_before = sys.getsizeof(gc.get_objects())
 
         # Fetch all rows
-        rows = db.fetch_all("SELECT * FROM test")
+        rows = db.execute("SELECT * FROM test")
 
         # Measure memory after
         gc.collect()
@@ -544,7 +544,7 @@ class TestComplexQueryPerformance:
 
         # Complex nested query
         start = time.time()
-        rows = db.fetch_all("""
+        rows = db.execute("""
             SELECT u.region, AVG(subq.total) as avg_total
             FROM users u
             JOIN (
@@ -580,7 +580,7 @@ class TestComplexQueryPerformance:
 
         # Multiple JOINs
         start = time.time()
-        rows = db.fetch_all("""
+        rows = db.execute("""
             SELECT u.name, p.name as product, p.price
             FROM orders o
             JOIN users u ON o.user_id = u.id
@@ -641,7 +641,7 @@ class TestLoadTesting:
                 write_count += 1
             else:
                 # 80% reads
-                db.fetch_all("SELECT * FROM test WHERE value < :val", {"val": i})
+                db.execute("SELECT * FROM test WHERE value < :val", {"val": i})
                 read_count += 1
 
         elapsed = time.time() - start

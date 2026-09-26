@@ -95,7 +95,7 @@ class TestExecuteScriptBasic:
         assert result.success is True
 
         # Verify data was inserted
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY name")
+        rows = db_manager.execute("SELECT * FROM test_script_users ORDER BY name")
         assert len(rows) == 2
         assert rows[0]['name'] == 'Alice'
         assert rows[1]['name'] == 'Bob'
@@ -121,7 +121,7 @@ class TestExecuteScriptBasic:
         assert result.success is True
 
         # Verify semicolons in bio field are preserved
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY name")
+        rows = db_manager.execute("SELECT * FROM test_script_users ORDER BY name")
         assert len(rows) == 2
         assert rows[1]['name'] == 'John'
         assert rows[1]['bio'] == 'Loves SQL; enjoys programming'
@@ -146,7 +146,7 @@ class TestExecuteScriptBasic:
         assert result.success is True
 
         # Verify escaped quotes are handled correctly
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users")
+        rows = db_manager.execute("SELECT * FROM test_script_users")
         assert len(rows) == 1
         assert rows[0]['name'] == "O'Brien"
         assert rows[0]['bio'] == "It's a test; he's an expert"
@@ -173,7 +173,7 @@ class TestExecuteScriptComments:
         result = await db_manager.execute_script(script)
         assert result.success is True
 
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY name")
+        rows = db_manager.execute("SELECT * FROM test_script_users ORDER BY name")
         assert len(rows) == 2
 
     @pytest.mark.asyncio
@@ -196,7 +196,7 @@ class TestExecuteScriptComments:
         result = await db_manager.execute_script(script)
         assert result.success is True
 
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY name")
+        rows = db_manager.execute("SELECT * FROM test_script_users ORDER BY name")
         assert len(rows) == 2
 
 
@@ -234,11 +234,11 @@ class TestExecuteScriptComplex:
         assert result.success is True
 
         # Verify users
-        users = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY id")
+        users = db_manager.execute("SELECT * FROM test_script_users ORDER BY id")
         assert len(users) == 2
 
         # Verify posts
-        posts = db_manager.fetch_all("SELECT * FROM test_script_posts ORDER BY id")
+        posts = db_manager.execute("SELECT * FROM test_script_posts ORDER BY id")
         assert len(posts) == 2
         assert posts[0]['content'] == "This is Alice's first post; welcome!"
         assert posts[1]['content'] == "Hello; I'm new here!"
@@ -272,7 +272,7 @@ class TestExecuteScriptComplex:
         result = await db_manager.execute_script(script)
         assert result.success is True
 
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users ORDER BY id")
+        rows = db_manager.execute("SELECT * FROM test_script_users ORDER BY id")
         assert len(rows) == 2
         assert 'Loves SQL; enjoys: INSERT, UPDATE, DELETE' in rows[0]['bio']
         assert "She's written 100+ queries; Still learning!" in rows[1]['notes']
@@ -292,7 +292,7 @@ class TestExecuteScriptComplex:
         result = await db_manager.execute_script(script)
         assert result.success is True
 
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users")
+        rows = db_manager.execute("SELECT * FROM test_script_users")
         assert len(rows) == 1
         assert rows[0]['name'] == 'Alice'
 
@@ -313,7 +313,7 @@ class TestExecuteScriptComplex:
         result = await db_manager.execute_script(script)
         assert result.success is True
 
-        rows = db_manager.fetch_all("SELECT * FROM test_script_users")
+        rows = db_manager.execute("SELECT * FROM test_script_users")
         assert len(rows) == 1
 
 

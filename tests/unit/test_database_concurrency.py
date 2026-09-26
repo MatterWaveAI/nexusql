@@ -44,7 +44,7 @@ class TestConcurrentReads:
         # SQLite will fail with thread safety errors - that's expected behavior
         def read_data():
             try:
-                rows = db.fetch_all("SELECT * FROM test")
+                rows = db.execute("SELECT * FROM test")
                 return len(rows) if rows else 0
             except Exception:
                 # Expected for SQLite - connection can't be shared across threads
@@ -83,7 +83,7 @@ class TestConcurrentReads:
             def read_with_own_connection():
                 db = DatabaseManager(config)
                 db.connect()
-                rows = db.fetch_all("SELECT * FROM test")
+                rows = db.execute("SELECT * FROM test")
                 count = len(rows)
                 db.disconnect()
                 return count
@@ -206,8 +206,7 @@ class TestAsyncConcurrency:
 
         # Concurrent async reads
         async def async_read():
-            # fetch_all is sync, but we can call it concurrently via asyncio
-            return len(db.fetch_all("SELECT * FROM test"))
+            return len(await db.execute_async("SELECT * FROM test"))
 
         tasks = [async_read() for _ in range(20)]
         results = await asyncio.gather(*tasks)
@@ -257,7 +256,7 @@ class TestAsyncConcurrency:
 
         async def write_and_read(value):
             await db.execute_async("INSERT INTO test (value) VALUES (:val)", {"val": value})
-            rows = db.fetch_all("SELECT * FROM test")
+            rows = db.execute("SELECT * FROM test")
             return len(rows)
 
         tasks = [write_and_read(i) for i in range(10)]
@@ -553,7 +552,7 @@ class TestRaceConditions:
 
             verify_db = DatabaseManager(config)
             verify_db.connect()
-            rows = verify_db.fetch_all("SELECT * FROM test WHERE username = :u", {"u": "duplicate_user"})
+            rows = verify_db.execute("SELECT * FROM test WHERE username = :u", {"u": "duplicate_user"})
             # Should only have one row (UNIQUE constraint enforced)
             assert len(rows) == 1
             verify_db.disconnect()

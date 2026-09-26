@@ -241,11 +241,9 @@ class TestMSSQLTransactions:
             )
         ''')
 
-        # Start transaction
-        mssql_db.execute("BEGIN TRANSACTION")
-        mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
-        mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
-        mssql_db.execute("COMMIT TRANSACTION")
+        with mssql_db.transaction():
+            mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
+            mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
 
         result = mssql_db.execute("SELECT COUNT(*) as count FROM test_transactions")
         assert result[0]['count'] == 2
@@ -259,9 +257,13 @@ class TestMSSQLTransactions:
             )
         ''')
 
-        mssql_db.execute("BEGIN TRANSACTION")
-        mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
-        mssql_db.execute("ROLLBACK TRANSACTION")
+        class _Abort(Exception):
+            pass
+
+        with pytest.raises(_Abort):
+            with mssql_db.transaction():
+                mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
+                raise _Abort()
 
         result = mssql_db.execute("SELECT COUNT(*) as count FROM test_transactions")
         assert result[0]['count'] == 0
@@ -275,12 +277,12 @@ class TestMSSQLTransactions:
             )
         ''')
 
-        mssql_db.execute("BEGIN TRANSACTION")
-        mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
-        mssql_db.execute("SAVE TRANSACTION savepoint1")
-        mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
-        mssql_db.execute("ROLLBACK TRANSACTION savepoint1")
-        mssql_db.execute("COMMIT TRANSACTION")
+        with mssql_db.transaction():
+            mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test1"})
+            # Savepoints are passed through to the server as ordinary SQL.
+            mssql_db.execute("SAVE TRANSACTION savepoint1")
+            mssql_db.execute("INSERT INTO test_transactions (value) VALUES (:value)", {"value": "test2"})
+            mssql_db.execute("ROLLBACK TRANSACTION savepoint1")
 
         result = mssql_db.execute("SELECT COUNT(*) as count FROM test_transactions")
         assert result[0]['count'] == 1  # Only test1 should be committed

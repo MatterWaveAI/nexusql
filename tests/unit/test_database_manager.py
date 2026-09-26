@@ -90,7 +90,7 @@ class TestDatabaseManager:
         """, {"cat": "A", "qty": 30})
 
         # Fetch all with filter
-        rows = db_manager.fetch_all("""
+        rows = db_manager.execute("""
             SELECT * FROM test_items WHERE category = :category ORDER BY quantity
         """, {"category": "A"})
 
@@ -181,7 +181,7 @@ class TestDatabaseMigrations:
         await db.initialize(apply_schema=True)
 
         # Check applied migrations
-        rows = db.fetch_all("SELECT * FROM ia_migrations ORDER BY version")
+        rows = db.execute("SELECT * FROM ia_migrations ORDER BY version")
 
         # Should have migrations from system migrations directory
         assert len(rows) > 0

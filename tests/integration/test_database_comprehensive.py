@@ -201,7 +201,8 @@ def db_manager(db_config):
         ensure_mssql_database_exists(db_config.database_url)
 
     db = DatabaseManager(db_config)
-    db.connect()
+    if not db.connect():
+        pytest.skip(f"{db_config.database_type.value} not available")
 
     # Clean up test tables
     test_tables = ['test_orders', 'test_products', 'test_users']
@@ -519,25 +520,15 @@ class TestTransactionConsistency:
         """Test transaction commit"""
         self._create_users_table(db_manager)
 
-        # Use database-specific transaction syntax
-        from nexusql import DatabaseType
-        if db_manager.config.database_type == DatabaseType.POSTGRESQL:
-            db_manager.execute("BEGIN")
-        elif db_manager.config.database_type == DatabaseType.MYSQL:
-            db_manager.execute("START TRANSACTION")
-        elif db_manager.config.database_type == DatabaseType.MSSQL:
-            db_manager.execute("BEGIN TRANSACTION")
-
-        db_manager.execute(
-            QueryRepository.INSERT_USER,
-            {"username": "tx_user1", "email": "tx1@example.com", "age": 25, "balance": Decimal("100.00"), "is_active": True}
-        )
-        db_manager.execute(
-            QueryRepository.INSERT_USER,
-            {"username": "tx_user2", "email": "tx2@example.com", "age": 30, "balance": Decimal("200.00"), "is_active": True}
-        )
-
-        db_manager.execute("COMMIT")
+        with db_manager.transaction():
+            db_manager.execute(
+                QueryRepository.INSERT_USER,
+                {"username": "tx_user1", "email": "tx1@example.com", "age": 25, "balance": Decimal("100.00"), "is_active": True}
+            )
+            db_manager.execute(
+                QueryRepository.INSERT_USER,
+                {"username": "tx_user2", "email": "tx2@example.com", "age": 30, "balance": Decimal("200.00"), "is_active": True}
+            )
 
         # Verify both users exist
         count = self._get_user_count(db_manager)
@@ -553,21 +544,17 @@ class TestTransactionConsistency:
             {"username": "existing_user", "email": "existing@example.com", "age": 25, "balance": Decimal("100.00"), "is_active": True}
         )
 
-        # Use database-specific transaction syntax
-        from nexusql import DatabaseType
-        if db_manager.config.database_type == DatabaseType.POSTGRESQL:
-            db_manager.execute("BEGIN")
-        elif db_manager.config.database_type == DatabaseType.MYSQL:
-            db_manager.execute("START TRANSACTION")
-        elif db_manager.config.database_type == DatabaseType.MSSQL:
-            db_manager.execute("BEGIN TRANSACTION")
+        # Roll back by raising out of the transaction block.
+        class _Abort(Exception):
+            pass
 
-        db_manager.execute(
-            QueryRepository.INSERT_USER,
-            {"username": "tx_user", "email": "tx@example.com", "age": 30, "balance": Decimal("200.00"), "is_active": True}
-        )
-
-        db_manager.execute("ROLLBACK")
+        with pytest.raises(_Abort):
+            with db_manager.transaction():
+                db_manager.execute(
+                    QueryRepository.INSERT_USER,
+                    {"username": "tx_user", "email": "tx@example.com", "age": 30, "balance": Decimal("200.00"), "is_active": True}
+                )
+                raise _Abort()
 
         # Verify only the first user exists
         count = self._get_user_count(db_manager)
