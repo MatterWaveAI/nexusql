@@ -165,3 +165,69 @@ def db_manager(request, sqlite_url, postgresql_url, mysql_url, mssql_url):
         db.disconnect()
     except:
         pass
+
+# --- backend reachability, probed once per session -------------------------------
+#
+# A declared-but-absent backend costs 15 seconds per attempt: the pool retries for 10
+# and then gives up. Multiplied across every parametrised test that is about to skip
+# anyway, that turned a CI run into minutes of waiting. This probes each backend once
+# and caches the answer.
+#
+# It exists because a Gitea runner in hostexecutor mode silently ignores `services:`,
+# so TEST_*_URL points at whatever is already on that port -- usually with different
+# credentials.
+
+_REACHABLE: dict = {}
+
+
+def backend_reachable(url: str) -> bool:
+    """True if this URL accepts a connection. Probed once per session, then cached."""
+    if url in _REACHABLE:
+        return _REACHABLE[url]
+    from nexusql import DatabaseManager
+    try:
+        db = DatabaseManager(url)
+        ok = bool(db.connect())
+        if ok:
+            db.disconnect()
+    except Exception:
+        ok = False
+    _REACHABLE[url] = ok
+    return ok
+
+
+def skip_unless_reachable(url: str, name: str) -> None:
+    """Skip the test unless `url` is a database we can actually reach."""
+    if not backend_reachable(url):
+        pytest.skip(f"{name} not reachable at {url.split('@')[-1]}")
+
+def pytest_collection_modifyitems(config, items):
+    """Skip every test parametrised on a backend we cannot reach.
+
+    Applied at collection, before any fixture runs, so each backend is probed once
+    for the whole session rather than once per test. Individual fixtures still guard
+    themselves -- this only stops the suite paying 15 seconds per parametrisation to
+    rediscover the same absence.
+
+    A parametrisation counts as a backend when its id contains the name, which is how
+    every file in tests/integration/ names them.
+    """
+    import os
+
+    urls = {
+        "postgres": os.environ.get("TEST_POSTGRESQL_URL"),
+        "postgresql": os.environ.get("TEST_POSTGRESQL_URL"),
+        "mysql": os.environ.get("TEST_MYSQL_URL"),
+        "mssql": os.environ.get("TEST_MSSQL_URL"),
+    }
+
+    for item in items:
+        name = item.name.lower()
+        for backend, url in urls.items():
+            if f"[{backend}" not in name and f"-{backend}]" not in name:
+                continue
+            if not url:
+                item.add_marker(pytest.mark.skip(reason=f"{backend}: TEST_*_URL not set"))
+            elif not backend_reachable(url):
+                item.add_marker(pytest.mark.skip(reason=f"{backend} not reachable"))
+            break

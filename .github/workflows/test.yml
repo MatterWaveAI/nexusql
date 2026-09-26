@@ -130,9 +130,13 @@ jobs:
         TEST_MYSQL_URL: "mysql://testuser:testpass@localhost:3306/nexusql_test"
         TEST_MSSQL_URL: "mssql://sa:TestPass123!@localhost:1433/nexusql_test?TrustServerCertificate=yes"
       run: |
-          # Deselect MSSQL when the driver could not be installed. The marker is already
-          # declared in pyproject; a missing optional driver is not a failing build.
-          if [ "${MSSQL_DRIVER:-}" = "absent" ]; then DESELECT='-m "not mssql"'; else DESELECT=""; fi
+          # This job declares services: for postgres, mysql and mssql. A runner in
+          # hostexecutor mode ignores them -- it runs on the host, so whatever already
+          # listens on 5432/3306 answers instead, with other credentials. Probe each
+          # backend and deselect the ones that are not ours, rather than failing a build
+          # over a database that was never started.
+          DESELECT=$(python scripts/ci_available_backends.py)
+          [ -n "$DESELECT" ] && echo "::notice::deselecting unavailable backends: $DESELECT"
           eval pytest tests/integration/ -v --tb=short $DESELECT --cov=nexusql --cov-append --cov-report=xml --cov-report=term
 
     - name: Upload coverage to Codecov

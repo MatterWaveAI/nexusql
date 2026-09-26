@@ -59,8 +59,14 @@ def db_config(request):
 @pytest.fixture
 def setup_test_table(db_config):
     """Set up test table before tests"""
+    # Probed once per session and cached -- an absent backend costs 15s per attempt
+    # otherwise, and every parametrised test pays it before skipping anyway.
+    from tests.conftest import skip_unless_reachable
+    skip_unless_reachable(db_config.database_url, db_config.database_type.value)
+
     db = DatabaseManager(db_config)
-    db.connect()
+    if not db.connect():
+        pytest.skip(f"{db_config.database_type.value} not reachable")
 
     # Clean up any existing test table
     try:
@@ -115,8 +121,14 @@ def setup_test_table(db_config):
     yield db_config
 
     # Clean up after tests
+    # Probed once per session and cached -- an absent backend costs 15s per attempt
+    # otherwise, and every parametrised test pays it before skipping anyway.
+    from tests.conftest import skip_unless_reachable
+    skip_unless_reachable(db_config.database_url, db_config.database_type.value)
+
     db = DatabaseManager(db_config)
-    db.connect()
+    if not db.connect():
+        pytest.skip(f"{db_config.database_type.value} not reachable")
     try:
         db.execute("DROP TABLE IF EXISTS test_concurrent_workers")
     except:

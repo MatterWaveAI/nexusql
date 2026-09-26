@@ -196,9 +196,17 @@ def db_manager(db_config):
     """Create database manager for testing"""
     from tests.conftest import ensure_mssql_database_exists
 
-    # For MSSQL, ensure test database exists first
+    # For MSSQL, ensure the test database exists first. This runs before connect(),
+    # so it must not block when the server is absent -- it has no timeout of its own
+    # and hung the whole suite when a services: block was ignored by the runner.
     if db_config.database_type == DatabaseType.MSSQL:
-        ensure_mssql_database_exists(db_config.database_url)
+        try:
+            ensure_mssql_database_exists(db_config.database_url)
+        except Exception as exc:
+            pytest.skip(f"mssql not reachable: {exc}")
+
+    from tests.conftest import skip_unless_reachable
+    skip_unless_reachable(db_config.database_url, db_config.database_type.value)
 
     db = DatabaseManager(db_config)
     if not db.connect():
