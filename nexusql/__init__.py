@@ -117,3 +117,29 @@ __all__ += [
     'FullTextSearch',
     'AsyncFullTextSearch',
 ]
+
+# feature/schema-validation
+
+from .schema import (
+    ColumnInfo,
+    ColumnSpec,
+    IndexInfo,
+    IndexSpec,
+    SchemaValidationError,
+    TableInfo,
+    TableNotFoundError,
+    TableSpec,
+    ValidationReport,
+)
+
+__all__ += [
+    'ColumnInfo',
+    'ColumnSpec',
+    'IndexInfo',
+    'IndexSpec',
+    'SchemaValidationError',
+    'TableInfo',
+    'TableNotFoundError',
+    'TableSpec',
+    'ValidationReport',
+]

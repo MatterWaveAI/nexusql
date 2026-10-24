@@ -545,6 +545,51 @@ truncate(db, ["accounts", "users"])          # TRUNCATE .. RESTART IDENTITY on
 SQLite file in `tmp_path`, and skips when a server is unreachable;
 `nexusql_sqlite` is always a fresh SQLite file. Importing `nexusql` or
 `nexusql.testing` does not import pytest. See [docs/TESTING.md](docs/TESTING.md).
+## Schema Introspection and Validation
+
+`introspect` reports a table's columns and indexes with each column's raw
+dialect type and a normalised `kind` (integer, bigint, float, decimal, text,
+boolean, timestamp, date, json, uuid, bytes, other). `validate_schema`
+compares the live schema with a spec and `check_params` checks a params
+dict against the table before a query runs:
+
+```python
+from nexusql import TableSpec, ColumnSpec, IndexSpec, SchemaValidationError
+
+info = db.introspect("users")
+info.column("email").kind        # "text" on every backend
+info.primary_key                 # ["id"]
+db.list_tables()                 # base tables in the current schema
+
+report = db.validate_schema([
+    TableSpec("users", columns=[
+        ColumnSpec("id", "SERIAL", primary_key=True),
+        ColumnSpec("email", "VARCHAR(255)", nullable=False),
+        ColumnSpec("active", "BOOLEAN"),
+        ColumnSpec("profile", "JSONB"),
+    ], indexes=[IndexSpec(("email",), unique=True)]),
+])
+if not report.ok:
+    print(report)
+    # schema validation failed with 2 errors (1 table checked):
+    #   - users.profile: missing column
+    #   - users: missing unique index on (email)
+
+try:
+    db.check_params("users", {"email": None, "nickname": "x"})
+except SchemaValidationError as exc:
+    exc.keys   # ["email", "nickname"]
+```
+
+Specs are written against the canonical PostgreSQL types and validate on
+every backend, because kinds are compared through the translator's
+equivalences: the `INTEGER` that `BOOLEAN` becomes on SQLite, the
+`NVARCHAR(MAX)` that `JSONB` becomes on SQL Server and the `CHAR(36)` that
+`UUID` becomes on MySQL all match. Indexes match on their columns, not their
+dialect-assigned names. `check_params` caches introspection per table;
+`invalidate_schema_cache()` drops it after a migration. The async backend
+offers `introspect`, `list_tables` and `validate_schema` for PostgreSQL. See
+[docs/SCHEMA_VALIDATION.md](docs/SCHEMA_VALIDATION.md).
 
 ## Advanced Features
 
@@ -650,6 +695,17 @@ Check if table exists.
 
 #### `fts` (property)
 Full-text search helpers: `fts.create_index(table, columns, name=None)`, `fts.drop_index(table, name=None)`, `fts.search(table, columns, query, limit=20, offset=0, name=None) -> List[Dict]` and `fts.suggest(table, column, term, limit=10, install=False) -> List[str]`. See [docs/FULL_TEXT_SEARCH.md](docs/FULL_TEXT_SEARCH.md).
+#### `list_tables() -> List[str]`
+Base tables in the current schema.
+
+#### `introspect(table) -> TableInfo`
+Columns (raw type, normalised kind, nullable, default, primary key, auto-increment) and indexes. Raises `TableNotFoundError` for an absent table.
+
+#### `validate_schema(expected, strict=False) -> ValidationReport`
+Compare the live schema with a list of `TableSpec` (or dicts). `report.ok`, `report.errors`, `str(report)`.
+
+#### `check_params(table, params) -> None`
+Raise `SchemaValidationError` naming the keys that do not fit the table's columns. Cached per table; `invalidate_schema_cache(table=None)` clears it.
 
 #### `async execute_script(script) -> QueryResult`
 Execute multiple SQL statements.

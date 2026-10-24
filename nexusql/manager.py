@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
+from .schema import ExpectedSchema, SchemaInspector, TableInfo, ValidationReport
 
 try:
     import psycopg
@@ -195,6 +196,9 @@ class DatabaseManager:
         # PostgreSQL primary-key column per table, looked up once for
         # execute(..., return_id=True) and reused for later inserts.
         self._pk_cache: Dict[str, str] = {}
+
+        # Catalog access and the per-table cache behind check_params().
+        self._schema = SchemaInspector(self)
 
     # ------------------------------------------------------------------
     # Per-thread connection state
@@ -1326,6 +1330,55 @@ class DatabaseManager:
             # connection, so there is nothing to clean up here.
             logger.error(f"table_exists failed: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Schema introspection and validation (nexusql/schema.py)
+    # ------------------------------------------------------------------
+
+    def list_tables(self) -> List[str]:
+        """Names of the base tables in the current schema (database on MySQL)."""
+        return self._schema.list_tables()
+
+    def introspect(self, table: str) -> TableInfo:
+        """
+        Columns and indexes of ``table`` as the database reports them.
+
+        Each column carries the dialect's raw type and a normalised ``kind``
+        (integer, bigint, float, decimal, text, boolean, timestamp, date,
+        json, uuid, bytes, other). Raises ``TableNotFoundError`` when the
+        table does not exist. The result refreshes the cache that
+        ``check_params`` reads.
+        """
+        return self._schema.introspect(table)
+
+    def validate_schema(self, expected: ExpectedSchema,
+                        strict: bool = False) -> ValidationReport:
+        """
+        Compare the live schema with ``expected``: a list of ``TableSpec``
+        (or the equivalent dicts) naming tables, columns and indexes.
+
+        Kinds are compared through the translator's equivalences, so a spec
+        written against the canonical PostgreSQL types validates on every
+        backend. With ``strict=True`` columns not in the spec are errors;
+        otherwise they are listed as warnings.
+        """
+        return self._schema.validate_schema(expected, strict=strict)
+
+    def check_params(self, table: str, params: Dict[str, Any]) -> None:
+        """
+        Raise ``SchemaValidationError`` if ``params`` names a column
+        ``table`` does not have, or carries a value whose Python type does
+        not fit the column's kind (None for a NOT NULL column included).
+
+        Introspection is cached per table, so after the first call this
+        costs no round-trip; ``invalidate_schema_cache`` drops the cache
+        after a migration.
+        """
+        self._schema.check_params(table, params)
+
+    def invalidate_schema_cache(self, table: Optional[str] = None) -> None:
+        """Forget cached introspection for ``table``, or for every table."""
+        self._schema.invalidate(table)
 
     def _split_sql_statements(self, script: str) -> List[str]:
         """
