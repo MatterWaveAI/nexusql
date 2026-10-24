@@ -675,7 +675,9 @@ class AsyncPostgresBackend(DatabaseInterface):
         joined = self._pinned_conn is not None
         set_sql = SET_TENANT_SQL[DatabaseType.POSTGRESQL]
 
-        async with self.transaction():
+        # Joining rather than a savepoint: the setting only needs the open
+        # transaction's scope.
+        async with self.transaction(nested="join"):
             previous, self._tenant_id = self._tenant_id, value
             try:
                 await self.execute(set_sql, {"tenant_id": value})

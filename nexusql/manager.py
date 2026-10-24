@@ -472,6 +472,7 @@ class DatabaseManager:
         the policy filters the table, and the ``<table>_scoped`` view elsewhere.
         """
         return tenancy.scoped_name(self.config.database_type, table)
+
     @contextmanager
     def _savepoint(self):
         """

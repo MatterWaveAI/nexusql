@@ -267,7 +267,9 @@ def tenant_scope(db, tenant_id: Any):
     db_type = db.config.database_type
     joined = db._in_transaction
 
-    with db.transaction():
+    # Setting a session variable needs the transaction's scope, not a
+    # savepoint of its own, so a nested block joins the one already open.
+    with db.transaction(nested="join"):
         previous = getattr(db._state, 'tenant_id', None)
         db._state.tenant_id = value
         try:
