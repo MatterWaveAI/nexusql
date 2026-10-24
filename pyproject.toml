@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexusql"
-version = "0.2.0.dev4"
+version = "0.3.0"
 description = "Multi-database abstraction layer with unified API for PostgreSQL, MySQL, SQLite, and MSSQL"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    {name = "David", email = "david@example.com"}
+    {name = "MatterWave AI"}
 ]
 keywords = ["database", "sql", "postgresql", "mysql", "sqlite", "mssql", "multi-database", "abstraction"]
 classifiers = [
@@ -47,10 +47,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/nexusql"
-Documentation = "https://github.com/yourusername/nexusql#readme"
-Repository = "https://github.com/yourusername/nexusql"
-Issues = "https://github.com/yourusername/nexusql/issues"
+Homepage = "https://github.com/matterwaveai/nexusql"
+Documentation = "https://github.com/matterwaveai/nexusql#readme"
+Repository = "https://github.com/matterwaveai/nexusql"
+Issues = "https://github.com/matterwaveai/nexusql/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

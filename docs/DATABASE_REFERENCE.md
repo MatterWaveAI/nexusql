@@ -41,7 +41,7 @@ db = DatabaseManager("postgresql://localhost/mydb")
 db.connect()
 
 # Write queries once, run anywhere
-users = db.fetch_all(
+users = db.execute(
     "SELECT * FROM users WHERE age > :min_age",
     {"min_age": 18}
 )
@@ -58,7 +58,7 @@ db.disconnect()
 | Database | Status | Driver | Notes |
 |----------|--------|--------|-------|
 | **SQLite** | ✅ Full | Built-in | Perfect for dev/testing |
-| **PostgreSQL** | ✅ Full | psycopg2 | Recommended for production |
+| **PostgreSQL** | ✅ Full | psycopg 3 | Recommended for production; sync and async |
 | **MySQL** | ✅ Full | pymysql | Full compatibility |
 | **MSSQL** | ✅ Full | pyodbc | Requires ODBC driver |
 
@@ -112,7 +112,7 @@ user = db.fetch_one(
 print(user)  # {'id': 1, 'name': 'Alice', 'email': 'alice@example.com', 'age': 30}
 
 # SELECT all rows
-users = db.fetch_all(
+users = db.execute(
     "SELECT * FROM users WHERE age >= :min_age",
     {"min_age": 25}
 )
@@ -136,7 +136,7 @@ db.disconnect()
 
 ```python
 # JOINs
-results = db.fetch_all("""
+results = db.execute("""
     SELECT u.name, o.total, o.created_at
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -155,7 +155,7 @@ stats = db.fetch_one("""
 """, {"active": 1})
 
 # Subqueries
-power_users = db.fetch_all("""
+power_users = db.execute("""
     SELECT u.*
     FROM users u
     WHERE u.id IN (
@@ -203,11 +203,11 @@ NexusQL provides a Docker Compose setup for testing against real databases.
 docker-compose -f tests/docker-compose.test.yml up -d
 
 # 2. Set environment variables (one-liner)
-export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/ia_modules_test" TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/ia_modules_test" TEST_MSSQL_URL="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes"
+export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test" TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/nexusql_test" TEST_MSSQL_URL="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes"
 
 # Or set them separately:
-export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/ia_modules_test"
-export TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/ia_modules_test"
+export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test"
+export TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/nexusql_test"
 export TEST_MSSQL_URL="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes"
 
 # 3. Run tests
@@ -383,14 +383,17 @@ CREATE TABLE nexusql_migrations (
 class DatabaseManager:
     def __init__(self, database_url: str)
     def connect() -> bool
-    def disconnect() -> bool
+    def disconnect() -> None
+    async def close() -> None
+    def transaction()                      # context manager: with db.transaction(): ...
     def execute(query: str, params: Dict = None) -> List[Dict]
-    def fetch_one(query: str, params: Dict = None) -> Optional[Dict]
-    def fetch_all(query: str, params: Dict = None) -> List[Dict]
-    async def initialize(apply_schema: bool = True, app_migration_paths: List[str] = None) -> bool
     async def execute_async(query: str, params: Dict = None) -> List[Dict]
-    def execute_script(script: str) -> None
-    async def table_exists(table_name: str) -> bool
+    def fetch_one(query: str, params: Dict = None) -> Optional[Dict]
+    async def fetch_one_async(query: str, params: Dict = None) -> Optional[Dict]
+    def create_table(table_name: str, schema: str) -> None
+    def table_exists(table_name: str) -> bool
+    async def initialize(apply_schema: bool = True, app_migration_paths: List[str] = None) -> bool
+    async def execute_script(script: str) -> QueryResult
 ```
 
 ### Connection URLs
@@ -434,7 +437,7 @@ class TenantDatabase:
 
     def get_users(self, min_age: int):
         # Same query works for all tenants
-        return self.db.fetch_all(
+        return self.db.execute(
             "SELECT * FROM users WHERE age >= :min_age",
             {"min_age": min_age}
         )
@@ -460,7 +463,7 @@ else:
 db.connect()
 
 # Same queries everywhere!
-users = db.fetch_all("SELECT * FROM users WHERE active = :active", {"active": 1})
+users = db.execute("SELECT * FROM users WHERE active = :active", {"active": 1})
 ```
 
 ---
@@ -480,7 +483,7 @@ if not db.connect():
 **Import error:**
 ```python
 # Install required driver
-pip install psycopg2-binary  # PostgreSQL
+pip install "psycopg[binary,pool]"  # PostgreSQL
 pip install pymysql          # MySQL
 pip install pyodbc           # MSSQL
 ```
@@ -514,7 +517,7 @@ db.execute(query, {"name": user_input})
 
 ## Additional Resources
 
-- **GitHub**: https://github.com/yourusername/nexusql
-- **Issues**: https://github.com/yourusername/nexusql/issues
-- **Documentation**: https://github.com/yourusername/nexusql#readme
+- **GitHub**: https://github.com/matterwaveai/nexusql
+- **Issues**: https://github.com/matterwaveai/nexusql/issues
+- **Documentation**: https://github.com/matterwaveai/nexusql#readme
 - **Roadmap**: [POTENTIAL_DATABASE_ISSUES.md](POTENTIAL_DATABASE_ISSUES.md)

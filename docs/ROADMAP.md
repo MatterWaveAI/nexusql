@@ -7,7 +7,7 @@ This document tracks remaining issues that need attention and provides an implem
 The following issues have been **fixed and tested**:
 
 1. ✅ **fetch_one() MSSQL dict conversion** - Fixed in [manager.py:692-694](../nexusql/manager.py#L692-L694)
-2. ✅ **fetch_all() MSSQL dict conversion** - Fixed in [manager.py:715-717](../nexusql/manager.py#L715-L717)
+2. ✅ **fetch_all() MSSQL dict conversion** - Fixed; `fetch_all` was later removed in favour of `execute()`, which returns the same rows
 3. ✅ **NULL parameter handling** - Tested in [test_database_edge_cases.py:24](../tests/integration/test_database_edge_cases.py#L24)
 4. ✅ **Datetime parameter handling** - Tested in [test_database_edge_cases.py:53](../tests/integration/test_database_edge_cases.py#L53)
 5. ✅ **Empty string vs NULL** - Tested in [test_database_edge_cases.py:82](../tests/integration/test_database_edge_cases.py#L82)
@@ -156,8 +156,8 @@ The following features are **not yet implemented** but may be needed for future 
 ### 🔴 High Priority (Production Readiness)
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
-| **Connection Pooling** | Pool of reusable connections for high-concurrency apps | 12-16h | High |
-| **Transaction Management** | Explicit BEGIN/COMMIT/ROLLBACK with savepoints | 8-12h | High |
+| ~~Connection Pooling~~ | Done in 0.3.0: pooled server backends, see [POOLING_DESIGN.md](POOLING_DESIGN.md) | — | Done |
+| **Savepoints** | `transaction()` shipped in 0.3.0; nested use joins the outer transaction, so savepoints remain | 4-6h | High |
 | **Streaming Results** | Yield large result sets in chunks (avoid memory issues) | 6-8h | High |
 | **Query Performance Tools** | Slow query logging, EXPLAIN analysis | 4-6h | High |
 
@@ -196,8 +196,8 @@ The following features are **not yet implemented** but may be needed for future 
 3. ✅ Concurrency documentation and tests - **DONE**
 
 ### Phase 2: Production Readiness (30-42 hours)
-4. Connection pooling
-5. Transaction management (BEGIN/COMMIT/ROLLBACK/savepoints)
+4. ✅ Connection pooling - **DONE** (0.3.0)
+5. Savepoints for nested `transaction()` (the context manager itself is done in 0.3.0)
 6. Streaming query results
 7. Slow query logging
 

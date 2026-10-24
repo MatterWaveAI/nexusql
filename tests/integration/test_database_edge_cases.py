@@ -23,8 +23,8 @@ def db(request):
 
     url_map = {
         'sqlite': f"sqlite:///:memory:",
-        'postgresql': os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@localhost:15432/ia_modules_test"),
-        'mysql': os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@localhost:13306/ia_modules_test"),
+        'postgresql': os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@localhost:15432/nexusql_test"),
+        'mysql': os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@localhost:13306/nexusql_test"),
         'mssql': os.getenv("TEST_MSSQL_URL", "mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes")
     }
 

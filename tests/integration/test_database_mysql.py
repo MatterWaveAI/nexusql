@@ -16,7 +16,7 @@ def mysql_config():
     """Get MySQL connection configuration from environment"""
     url = os.environ.get(
         "TEST_MYSQL_URL",
-        "mysql://testuser:testpass@localhost:13306/ia_modules_test"
+        "mysql://testuser:testpass@localhost:13306/nexusql_test"
     )
     return ConnectionConfig(
         database_type=DatabaseType.MYSQL,

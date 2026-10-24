@@ -20,14 +20,14 @@ def sqlite_url(temp_db_path):
 @pytest.fixture
 def postgresql_url():
     """Get PostgreSQL test URL from environment"""
-    return os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@localhost:15432/ia_modules_test")
+    return os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@localhost:15432/nexusql_test")
 
 
 # MySQL test configuration
 @pytest.fixture
 def mysql_url():
     """Get MySQL test URL from environment"""
-    return os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@localhost:13306/ia_modules_test")
+    return os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@localhost:13306/nexusql_test")
 
 
 # MSSQL test configuration

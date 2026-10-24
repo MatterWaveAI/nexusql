@@ -100,18 +100,19 @@ independent transactions through the same manager.
 
 ### Upgrading from 0.1.x
 
+0.3.0 is the first release of these changes. (They also went out as 0.2.0;
+0.3.0 is the same breaking change, with corrected package metadata.)
+
 PostgreSQL now uses psycopg (psycopg3) for both the sync and async paths,
-replacing psycopg2 and asyncpg. There is one PostgreSQL dependency instead of
-two, and the `postgres-async` extra is gone — `nexusql[postgresql]` covers
-both:
+replacing psycopg2. `nexusql[postgresql]` installs the one driver both paths
+use:
 
 ```bash
 # 0.1.x
-pip install nexusql[postgresql]      # psycopg2, sync only
-pip install nexusql[postgres-async]  # asyncpg, async only
+pip install nexusql[postgresql]      # psycopg2-binary, sync only
 
-# 0.2.0
-pip install nexusql[postgresql]      # psycopg, both
+# 0.3.0
+pip install nexusql[postgresql]      # psycopg, sync and async
 ```
 
 Query code is unaffected: `:name` parameters and PostgreSQL-canonical SQL work
@@ -125,7 +126,7 @@ SELECT, so callers move to `execute`:
 # 0.1.x
 rows = db.fetch_all("SELECT * FROM users WHERE active = :active", {"active": True})
 
-# 0.2.0
+# 0.3.0
 rows = db.execute("SELECT * FROM users WHERE active = :active", {"active": True})
 ```
 
@@ -143,7 +144,7 @@ db.execute("BEGIN")
 db.execute("INSERT ...")
 db.execute("COMMIT")
 
-# 0.2.0
+# 0.3.0
 with db.transaction():
     db.execute("INSERT ...")
 ```
@@ -299,8 +300,8 @@ result = await db.fetch_one(
 if result.success:
     print(result.data[0])
 
-# Writes outside an explicit transaction are durable immediately; SELECT and
-# INSERT .. RETURNING return their rows in result.data.
+# Writes outside an explicit transaction are durable immediately. execute
+# returns the rows (a list of dicts) for SELECT and INSERT .. RETURNING.
 created = await db.execute(
     "INSERT INTO users (email) VALUES (:email) RETURNING id",
     {"email": "a@b.c"})
@@ -310,11 +311,9 @@ async with db.transaction():
     await db.execute("INSERT INTO users (email) VALUES (:email)",
                      {"email": "x@y.z"})
 
-# The sync manager's BEGIN/COMMIT/ROLLBACK statement protocol works too and
-# pins one pooled connection for the duration.
-await db.execute("BEGIN")
-await db.execute("INSERT INTO users (email) VALUES (:email)", {"email": "x@y.z"})
-await db.execute("COMMIT")
+# Use transaction() rather than execute("BEGIN"): a BEGIN sent through
+# execute runs on whichever pooled connection it borrows and is committed
+# when that statement returns, so it does not span the statements after it.
 
 print(await db.health_check())
 await db.disconnect()
@@ -327,7 +326,7 @@ missing rows. `execute_script` returns `QueryResult` with `success=False` on
 failure.
 
 The package still imports (sync-only) when the extra is not installed;
-`nexusql.ASYNCPG_AVAILABLE` tells you which world you are in.
+`nexusql.PSYCOPG_AVAILABLE` tells you which world you are in.
 
 ## Checking Table Existence
 
@@ -443,7 +442,11 @@ pytest
 pytest --cov=nexusql --cov-report=html
 
 # Run specific test file
-pytest tests/unit/test_manager.py -v
+pytest tests/unit/test_database_manager.py -v
+
+# Integration tests run against each backend whose URL is set and skip the rest
+export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test"
+pytest tests/integration
 ```
 
 ## Contributing
@@ -462,4 +465,4 @@ MIT
 
 ## Credits
 
-NexusQL was extracted from the [ia_modules](https://github.com/yourusername/ia_modules) project to provide a standalone, reusable database abstraction layer.
+NexusQL was extracted from [ia_modules](https://github.com/matterwaveai/ia_modules) to provide a standalone, reusable database abstraction layer.

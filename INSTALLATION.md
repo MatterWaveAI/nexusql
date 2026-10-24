@@ -28,33 +28,13 @@ pip install nexusql[mssql]        # MSSQL only
 pip install nexusql[all]          # All databases
 ```
 
-## Using with ia_modules
-
-The `ia_modules` package now depends on `nexusql`. To use it:
+## Development Install
 
 ```bash
-# Install nexusql first (editable mode for development)
+git clone https://github.com/matterwaveai/nexusql
 cd nexusql
-pip install -e .
-
-# Then install ia_modules
-cd ../ia_modules
-pip install -e .
+pip install -e ".[dev]"
 ```
-
-## Backward Compatibility
-
-Existing code using `ia_modules.database` will continue to work without changes:
-
-```python
-# Old import (still works)
-from ia_modules.database import DatabaseManager
-
-# New import (recommended)
-from nexusql import DatabaseManager
-```
-
-Both imports work identically. The ia_modules.database module now acts as a compatibility shim that forwards to nexusql.
 
 ## Verifying Installation
 
@@ -152,8 +132,8 @@ Make sure migration files are included in the package:
 For PostgreSQL, MySQL, or MSSQL, ensure the drivers are installed:
 
 ```bash
-# PostgreSQL
-pip install psycopg2-binary
+# PostgreSQL (psycopg 3)
+pip install "psycopg[binary,pool]"
 
 # MySQL
 pip install pymysql

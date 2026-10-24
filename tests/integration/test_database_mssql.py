@@ -18,7 +18,7 @@ def mssql_config():
     """Get MSSQL connection configuration from environment"""
     url = os.environ.get(
         "TEST_MSSQL_URL",
-        "mssql://sa:TestPass123!@localhost:11433/ia_modules_test"
+        "mssql://sa:TestPass123!@localhost:11433/nexusql_test"
     )
     return ConnectionConfig(
         database_type=DatabaseType.MSSQL,

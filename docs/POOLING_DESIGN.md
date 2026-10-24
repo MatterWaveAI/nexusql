@@ -1,6 +1,8 @@
 # Connection Pooling Design
 
-Status: proposal, not implemented. Target version: 0.2.0 (breaking).
+Status: implemented, released in 0.3.0 (first published as 0.2.0). This is the design record;
+it describes the drivers as they were before the change (psycopg2, asyncpg), which 0.3.0
+replaced with psycopg 3 throughout. The README is the current reference.
 
 ## Problem
 

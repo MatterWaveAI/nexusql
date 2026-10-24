@@ -78,7 +78,7 @@ class TestQueryPerformance:
 
         print(f"\nWithout index: {no_index_time*1000:.2f}ms")
         print(f"With index: {with_index_time*1000:.2f}ms")
-        print(f"Speedup: {no_index_time/with_index_time:.1f}x")
+        print(f"Speedup: {no_index_time/max(with_index_time, 1e-9):.1f}x")
 
         # Index should help (might not always be faster with small datasets)
         # Just verify both queries work

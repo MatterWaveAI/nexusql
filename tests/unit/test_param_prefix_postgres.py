@@ -21,7 +21,7 @@ from nexusql import DatabaseManager
 @pytest.fixture
 def postgres_manager():
     """DatabaseManager configured for PostgreSQL (no connection needed)."""
-    return DatabaseManager("postgresql://testuser:testpass@localhost:15432/ia_modules_test")
+    return DatabaseManager("postgresql://testuser:testpass@localhost:15432/nexusql_test")
 
 
 def test_insert_org_and_org_id(postgres_manager):

@@ -62,7 +62,7 @@ class TestConnectionPooling:
 
         print(f"\nNew connection each time: {new_connection_time:.3f}s")
         print(f"Reused connection: {reuse_time:.3f}s")
-        print(f"Speedup: {new_connection_time/reuse_time:.1f}x")
+        print(f"Speedup: {new_connection_time/max(reuse_time, 1e-9):.1f}x")
 
         # Reuse should be faster
         assert reuse_time < new_connection_time
@@ -168,7 +168,7 @@ class TestQueryOptimization:
         print(f"Index scan (10k rows): {with_index_time*1000:.2f}ms")
 
         if no_index_time > 0 and with_index_time > 0:
-            print(f"Speedup: {no_index_time/with_index_time:.1f}x")
+            print(f"Speedup: {no_index_time/max(with_index_time, 1e-9):.1f}x")
 
     def test_covering_index_performance(self, perf_test_db):
         """Test covering index optimization"""
@@ -255,7 +255,7 @@ class TestBatchOperations:
 
         print(f"\n1000 individual UPDATEs: {individual_time:.3f}s")
         print(f"1 bulk UPDATE (1000 rows): {bulk_time*1000:.2f}ms")
-        print(f"Speedup: {individual_time/bulk_time:.1f}x")
+        print(f"Speedup: {individual_time/max(bulk_time, 1e-9):.1f}x")
 
         assert bulk_time < individual_time
 

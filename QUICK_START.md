@@ -180,11 +180,11 @@ for user in users:
     )
 ```
 
-### Fetch All vs Fetch One
+### Execute vs Fetch One
 
 ```python
-# Fetch all rows
-all_users = db.fetch_all("SELECT * FROM users")
+# All rows: execute returns the result set as a list of dicts
+all_users = db.execute("SELECT * FROM users")
 # Returns: [{'id': 1, ...}, {'id': 2, ...}]
 
 # Fetch single row
@@ -222,7 +222,7 @@ if result.success:
 - In-memory: `sqlite:///:memory:`
 
 ### PostgreSQL
-- Install driver: `pip install psycopg2-binary`
+- Install driver: `pip install nexusql[postgresql]` (psycopg 3, sync and async)
 - Connection string: `postgresql://user:pass@host:port/dbname`
 - Best for production, supports advanced features
 

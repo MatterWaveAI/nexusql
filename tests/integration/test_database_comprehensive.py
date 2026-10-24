@@ -146,7 +146,7 @@ def postgres_config():
     """PostgreSQL configuration"""
     url = os.environ.get(
         "TEST_POSTGRESQL_URL",
-        "postgresql://testuser:testpass@localhost:15432/ia_modules_test"
+        "postgresql://testuser:testpass@localhost:15432/nexusql_test"
     )
     return ConnectionConfig(
         database_type=DatabaseType.POSTGRESQL,
@@ -159,7 +159,7 @@ def mysql_config():
     """MySQL configuration"""
     url = os.environ.get(
         "TEST_MYSQL_URL",
-        "mysql://testuser:testpass@localhost:13306/ia_modules_test"
+        "mysql://testuser:testpass@localhost:13306/nexusql_test"
     )
     return ConnectionConfig(
         database_type=DatabaseType.MYSQL,
@@ -172,7 +172,7 @@ def mssql_config():
     """MSSQL configuration"""
     url = os.environ.get(
         "TEST_MSSQL_URL",
-        "mssql://sa:TestPass123!@localhost:11433/ia_modules_test"
+        "mssql://sa:TestPass123!@localhost:11433/nexusql_test"
     )
     return ConnectionConfig(
         database_type=DatabaseType.MSSQL,
