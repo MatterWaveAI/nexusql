@@ -11,6 +11,7 @@ Multi-database abstraction layer with unified API for PostgreSQL, MySQL, SQLite,
 - ✅ **Type Safety** - Full typing support with Python 3.10+
 - ✅ **Async Ready** - Async/await compatible API
 - ✅ **Multi-Tenancy** - `tenant()` + `enable_row_security()`: real row-level security on PostgreSQL, scoped views elsewhere
+- ✅ **Streaming Results** - Walk large result sets in fixed-size chunks with `stream()`
 - ✅ **Production Ready** - Comprehensive test coverage
 
 ## Installation
@@ -217,6 +218,46 @@ pinned connection and is gone before it returns to the pool; nested blocks
 restore the outer tenant. With no tenant set, the policy and views match
 nothing. `AsyncPostgresBackend` offers the same calls. The full security
 boundary per backend is in [docs/ROW_LEVEL_SECURITY.md](docs/ROW_LEVEL_SECURITY.md).
+## Streaming Results
+
+`execute()` returns every row as a list. For a result too large to hold,
+`stream()` yields one dict at a time, fetching `chunk_size` rows per
+round-trip, so memory is bounded by the chunk rather than the table:
+
+```python
+for row in db.stream("SELECT * FROM events WHERE day = :day ORDER BY id",
+                     {"day": day}, chunk_size=1000):
+    export(row)
+
+# Or take each fetched batch as a list
+for batch in db.stream_chunks("SELECT id, payload FROM events", chunk_size=500):
+    index(batch)
+```
+
+The stream holds one connection from the first row until it ends, and hands
+it back on every exit: when the rows run out, when you `break` out of the
+loop (closing the generator), or when the query fails, in which case the
+connection is rolled back first. Nothing runs until the first iteration.
+
+On PostgreSQL this is a server-side (named) cursor, so the server sends rows
+per fetch instead of the driver buffering the whole result; MySQL uses
+pymysql's unbuffered cursor; SQLite and SQL Server use `fetchmany` on a plain
+cursor. Inside `transaction()` the stream uses the pinned connection and
+commits nothing; finish the stream before the block ends, since a stream
+must not outlive its transaction.
+
+`AsyncPostgresBackend.stream()` is the async form. An early exit releases
+the connection when the generator is closed, so iterate inside
+`contextlib.aclosing()` when you may `break`:
+
+```python
+async with contextlib.aclosing(db.stream("SELECT * FROM events")) as rows:
+    async for row in rows:
+        ...
+```
+
+[docs/STREAMING.md](docs/STREAMING.md) covers the per-backend details and
+the memory profile.
 
 ## SQL Translation
 
@@ -772,6 +813,13 @@ Same as `fetch_one`, run in a worker thread for server backends so it does not b
 
 #### `run_one(query) -> Optional[Dict]`
 `fetch_one()` for a query-builder statement.
+#### `stream(query, params=None, chunk_size=1000) -> Iterator[Dict]`
+Yields rows one at a time, fetching `chunk_size` per round-trip (a
+server-side cursor on PostgreSQL). Holds one connection until the generator
+is exhausted, closed, or fails; see [Streaming Results](#streaming-results).
+
+#### `stream_chunks(query, params=None, chunk_size=1000) -> Iterator[List[Dict]]`
+Same as `stream`, yielding each fetched chunk as a list.
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.
