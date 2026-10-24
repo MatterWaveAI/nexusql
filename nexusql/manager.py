@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
+from . import streaming
 
 try:
     import psycopg
@@ -1264,6 +1265,45 @@ class DatabaseManager:
         if self.config.database_type == DatabaseType.SQLITE:
             return self.fetch_one(query, params)
         return await asyncio.to_thread(self.fetch_one, query, params)
+
+    def stream(self, query: str, params: Optional[Dict] = None,
+               chunk_size: int = streaming.DEFAULT_CHUNK_SIZE):
+        """
+        Iterate over a query's rows without loading them all into memory.
+
+        Yields one dict per row in result order, fetching ``chunk_size`` rows
+        per round-trip. Memory use is bounded by the chunk, where execute()
+        holds the whole result. On PostgreSQL this is a server-side cursor,
+        so the server does not send the result ahead of the fetches either.
+
+            for row in db.stream("SELECT * FROM events ORDER BY id"):
+                process(row)
+
+        The connection is borrowed on the first iteration and held until the
+        generator ends: when the rows run out, when the consumer stops early
+        (``break`` closes the generator), or when the query fails, in which
+        case the connection is rolled back first. Inside ``transaction()``
+        the pinned connection is used and nothing is committed; finish the
+        stream before the block ends.
+
+        Args:
+            query: SQL with :param_name placeholders
+            params: Dict like {"param_name": "value"}
+            chunk_size: Rows fetched per round-trip; must be positive
+        """
+        self._reject_transaction_statement(query)
+        return streaming.stream_rows(self, query, params, chunk_size)
+
+    def stream_chunks(self, query: str, params: Optional[Dict] = None,
+                      chunk_size: int = streaming.DEFAULT_CHUNK_SIZE):
+        """
+        Like stream(), but yields each fetched chunk as a list of dicts.
+
+        For callers that work in batches anyway (bulk inserts elsewhere,
+        paged output); the connection rules are those of stream().
+        """
+        self._reject_transaction_statement(query)
+        return streaming.stream_chunks(self, query, params, chunk_size)
 
     def create_table(self, table_name: str, schema: str):
         """Create a table with the given schema"""

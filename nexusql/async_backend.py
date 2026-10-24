@@ -39,6 +39,7 @@ from .interfaces import (
     create_error_result,
     create_query_result,
 )
+from . import streaming
 from .manager import (
     DatabaseManager,
     PARAM_TOKEN,
@@ -398,6 +399,43 @@ class AsyncPostgresBackend(DatabaseInterface):
             logger.error(f"fetch_all failed: {exc}")
             raise
         return create_query_result(True, data=rows)
+
+    def stream(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+        chunk_size: int = streaming.DEFAULT_CHUNK_SIZE,
+    ):
+        """
+        Iterate over a query's rows without loading them all into memory.
+
+        An async generator of dicts in result order, backed by a server-side
+        cursor that fetches ``chunk_size`` rows per round-trip, so neither
+        this process nor the driver buffers the whole result.
+
+            async for row in db.stream("SELECT * FROM events ORDER BY id"):
+                await process(row)
+
+        The connection is borrowed on the first iteration and released when
+        the generator ends. Exhaustion and errors (rolled back) release it on
+        their own; an early exit releases it when the generator is closed,
+        so iterate inside ``contextlib.aclosing(db.stream(...))`` or call
+        ``aclose()`` when breaking out. Inside ``transaction()`` the pinned
+        connection is used and nothing is committed; finish the stream
+        before the block ends.
+        """
+        reject_transaction_statement(query)
+        return streaming.stream_rows_async(self, query, params, chunk_size)
+
+    def stream_chunks(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+        chunk_size: int = streaming.DEFAULT_CHUNK_SIZE,
+    ):
+        """Like stream(), but yields each fetched chunk as a list of dicts."""
+        reject_transaction_statement(query)
+        return streaming.stream_chunks_async(self, query, params, chunk_size)
 
     async def table_exists(self, table_name: str) -> bool:
         """Check whether a table exists in the current schema."""
