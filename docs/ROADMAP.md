@@ -156,7 +156,7 @@ The following features are **not yet implemented** but may be needed for future 
 | ~~Connection Pooling~~ | Done in 0.3.0: pooled server backends, see [POOLING_DESIGN.md](POOLING_DESIGN.md) | — | Done |
 | **Savepoints** | `transaction()` shipped in 0.3.0; nested use joins the outer transaction, so savepoints remain | 4-6h | High |
 | **Streaming Results** | Yield large result sets in chunks (avoid memory issues) | 6-8h | High |
-| **Query Performance Tools** | Slow query logging, EXPLAIN analysis | 4-6h | High |
+| ~~Query Performance Tools~~ | Done: slow-query logging, `explain()`, `query_stats()`, see [QUERY_PERFORMANCE.md](QUERY_PERFORMANCE.md) | — | Done |
 
 ### 🟡 Medium Priority (Advanced Features)
 | Feature | Description | Effort | Priority |
@@ -196,7 +196,7 @@ The following features are **not yet implemented** but may be needed for future 
 4. ✅ Connection pooling - **DONE** (0.3.0)
 5. Savepoints for nested `transaction()` (the context manager itself is done in 0.3.0)
 6. Streaming query results
-7. Slow query logging
+7. ✅ Slow query logging and EXPLAIN - **DONE**
 
 ### Phase 3: Advanced Features (36-50 hours)
 8. Row-level security helpers

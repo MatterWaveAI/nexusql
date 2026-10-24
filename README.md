@@ -336,6 +336,37 @@ failure.
 The package still imports (sync-only) when the extra is not installed;
 `nexusql.PSYCOPG_AVAILABLE` tells you which world you are in.
 
+## Query Performance
+
+Three opt-in tools, all off by default so a manager built without them is
+unchanged. Full details in [docs/QUERY_PERFORMANCE.md](docs/QUERY_PERFORMANCE.md).
+
+```python
+from nexusql import DatabaseManager, QueryTiming
+
+db = DatabaseManager(
+    "postgresql://user:pass@localhost/app",
+    slow_query_threshold_ms=200,       # WARNING via the nexusql logger at/over 200 ms
+    on_slow_query=lambda t: print(t),  # QueryTiming(sql, params, duration_ms, backend, rows)
+    log_params=False,                  # keep parameter values (often PII) out of the log
+    collect_stats=True,                # aggregate count / total_ms / max_ms per statement
+)
+db.connect()
+
+# The backend's own plan columns plus a normalised "plan" text column:
+# EXPLAIN on PostgreSQL/MySQL, EXPLAIN QUERY PLAN on SQLite, SHOWPLAN_ALL on
+# SQL Server. analyze=True runs the statement, so only SELECTs are accepted.
+for row in db.explain("SELECT * FROM orders WHERE customer_id = :cid", {"cid": 7}):
+    print(row["plan"])
+
+for stat in db.query_stats():        # slowest total first
+    print(stat.count, f"{stat.avg_ms:.1f} ms", stat.sql)
+db.reset_query_stats()
+```
+
+`AsyncPostgresBackend` takes the same four options and offers `await
+db.explain(...)`, `db.query_stats()` and `db.reset_query_stats()`.
+
 ## Checking Table Existence
 
 ```python
@@ -413,8 +444,9 @@ await db.initialize(
 
 ### DatabaseManager
 
-#### `__init__(database_url_or_config)`
-Initialize with database URL string or ConnectionConfig object.
+#### `__init__(database_url_or_config, ..., slow_query_threshold_ms=None, on_slow_query=None, log_params=False, collect_stats=False)`
+Initialize with database URL string or ConnectionConfig object. The last
+four options enable the [query performance tools](#query-performance).
 
 #### `connect() -> bool`
 Connect to the database.
@@ -448,6 +480,18 @@ Fetch single row with named parameters. `None` means the query succeeded and mat
 
 #### `async fetch_one_async(query, params=None) -> Optional[Dict]`
 Same as `fetch_one`, run in a worker thread for server backends so it does not block the event loop.
+
+#### `explain(query, params=None, analyze=False) -> List[Dict]`
+The backend's execution plan, one row per plan line, each with the backend's
+own columns plus a normalised `plan` text column. `analyze=True` executes the
+statement to measure it and is accepted only for SELECT statements.
+
+#### `query_stats() -> List[QueryStat]`
+Per-statement `count`, `total_ms`, `max_ms` (and `avg_ms`), keyed by the SQL
+with whitespace collapsed. Requires `collect_stats=True`.
+
+#### `reset_query_stats()`
+Clear the aggregates.
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.

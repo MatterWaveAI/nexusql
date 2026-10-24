@@ -9,9 +9,11 @@ import threading
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Callable, Optional, Any, Dict, List
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
+from .performance import QueryMonitor, QueryStat, QueryTiming, timed
+from . import performance as _performance
 
 try:
     import psycopg
@@ -156,7 +158,11 @@ class DatabaseManager:
 
     def __init__(self, database_url_or_config, pool_min: int = 1,
                  pool_max: int = 10, pool_timeout: float = 30.0,
-                 connect_timeout: float = 10.0):
+                 connect_timeout: float = 10.0,
+                 slow_query_threshold_ms: Optional[float] = None,
+                 on_slow_query: Optional[Callable[[QueryTiming], None]] = None,
+                 log_params: bool = False,
+                 collect_stats: bool = False):
         """
         Initialize DatabaseManager.
 
@@ -171,6 +177,14 @@ class DatabaseManager:
                 connecting. Separate from pool_timeout so an unreachable
                 server is reported promptly rather than after a full
                 checkout timeout.
+            slow_query_threshold_ms: Log a WARNING for every execute /
+                fetch_one that takes at least this long. None (the default)
+                disables timing altogether.
+            on_slow_query: Also called with a QueryTiming for each slow query.
+            log_params: Include parameter values in the slow-query log line.
+                Off by default because parameters often carry personal data.
+            collect_stats: Aggregate count / total / max duration per
+                statement, readable through query_stats().
         """
         if isinstance(database_url_or_config, ConnectionConfig):
             self.config = database_url_or_config
@@ -178,6 +192,13 @@ class DatabaseManager:
         else:
             self.database_url = database_url_or_config
             self.config = ConnectionConfig.from_url(database_url_or_config)
+
+        # None unless a performance option is set, so the timed query
+        # methods fall straight through to the real work.
+        self._monitor = QueryMonitor.for_options(
+            self.config.database_type.value, slow_query_threshold_ms,
+            on_slow_query, log_params, collect_stats,
+        )
 
         self._pool_min = pool_min
         self._pool_max = pool_max
@@ -996,6 +1017,7 @@ class DatabaseManager:
 
         return cursor
 
+    @timed
     def execute(self, query: str, params: Optional[Dict] = None,
                 return_id: bool = False):
         """
@@ -1215,6 +1237,7 @@ class DatabaseManager:
             return
         conn.commit()
 
+    @timed
     def fetch_one(self, query: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
         Fetch one row with named parameters.
@@ -1264,6 +1287,51 @@ class DatabaseManager:
         if self.config.database_type == DatabaseType.SQLITE:
             return self.fetch_one(query, params)
         return await asyncio.to_thread(self.fetch_one, query, params)
+
+    # ------------------------------------------------------------------
+    # Query performance tools (see nexusql/performance.py)
+    # ------------------------------------------------------------------
+
+    def explain(self, query: str, params: Optional[Dict] = None,
+                analyze: bool = False) -> List[Dict]:
+        """
+        The backend's execution plan for ``query``, one row per plan line.
+
+        Each row carries the backend's own columns plus a normalised ``plan``
+        text column, so ``"\\n".join(r["plan"] for r in db.explain(sql))``
+        prints a plan on every backend. The statement goes through the same
+        translation and parameter handling as ``execute``, so the plan is for
+        what would actually run.
+
+        PostgreSQL uses ``EXPLAIN`` (``EXPLAIN (ANALYZE, FORMAT TEXT)`` with
+        ``analyze=True``), SQLite ``EXPLAIN QUERY PLAN`` (SQLite cannot
+        analyze, so both forms return the same plan), MySQL ``EXPLAIN`` /
+        ``EXPLAIN ANALYZE``, SQL Server ``SET SHOWPLAN_ALL ON`` around the
+        statement (which is then not executed) or ``SET STATISTICS XML ON``
+        with ``analyze=True``.
+
+        ``analyze=True`` runs the statement to measure it, so it is accepted
+        only for SELECT statements; anything that writes raises ValueError
+        rather than being executed and partially undone.
+        """
+        return _performance.explain(self, query, params, analyze)
+
+    def query_stats(self) -> List[QueryStat]:
+        """
+        Per-statement aggregates (count, total_ms, max_ms) collected so far.
+
+        Requires ``collect_stats=True``; statements are keyed by their SQL
+        with whitespace collapsed. Slowest total first.
+        """
+        if self._monitor is None or not self._monitor.collect_stats:
+            raise RuntimeError(
+                "query_stats() needs DatabaseManager(..., collect_stats=True)")
+        return self._monitor.query_stats()
+
+    def reset_query_stats(self) -> None:
+        """Forget the aggregates collected so far."""
+        if self._monitor is not None:
+            self._monitor.reset_query_stats()
 
     def create_table(self, table_name: str, schema: str):
         """Create a table with the given schema"""

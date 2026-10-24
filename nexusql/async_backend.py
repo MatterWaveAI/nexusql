@@ -29,7 +29,7 @@ Requires the ``postgresql`` extra: ``pip install nexusql[postgresql]``
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .interfaces import (
     ConnectionConfig,
@@ -49,6 +49,15 @@ from .manager import (
     reject_transaction_statement,
     single_primary_key,
     with_returning,
+)
+from .performance import (
+    QueryMonitor,
+    QueryStat,
+    QueryTiming,
+    check_analyzable,
+    explain_sql,
+    timed_async,
+    with_plan,
 )
 
 try:
@@ -131,6 +140,10 @@ class AsyncPostgresBackend(DatabaseInterface):
         max_pool_size: int = 10,
         timeout: float = 30.0,
         connect_timeout: float = 10.0,
+        slow_query_threshold_ms: Optional[float] = None,
+        on_slow_query: Optional[Callable[[QueryTiming], None]] = None,
+        log_params: bool = False,
+        collect_stats: bool = False,
     ):
         """
         Args:
@@ -140,6 +153,11 @@ class AsyncPostgresBackend(DatabaseInterface):
             timeout: Seconds to wait for a free connection before raising
             connect_timeout: Seconds connect() waits for the pool to open
                 before reporting the server unreachable
+            slow_query_threshold_ms: Log a WARNING for every statement that
+                takes at least this long; None disables timing
+            on_slow_query: Also called with a QueryTiming per slow statement
+            log_params: Include parameter values in the slow-query log line
+            collect_stats: Aggregate per-statement timings for query_stats()
         """
         if not connection_string.lstrip().lower().startswith(
             ("postgresql://", "postgres://")
@@ -159,6 +177,12 @@ class AsyncPostgresBackend(DatabaseInterface):
         self._depth = 0
         # Primary-key column per table, for execute(..., return_id=True).
         self._pk_cache: Dict[str, str] = {}
+        # None unless a performance option is set; execute() is the one
+        # timed entry point, since fetch_one / fetch_all run through it.
+        self._monitor = QueryMonitor.for_options(
+            DatabaseType.POSTGRESQL.value, slow_query_threshold_ms,
+            on_slow_query, log_params, collect_stats,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -295,6 +319,7 @@ class AsyncPostgresBackend(DatabaseInterface):
     # Query execution
     # ------------------------------------------------------------------
 
+    @timed_async
     async def execute(
         self,
         query: str,
@@ -490,3 +515,49 @@ class AsyncPostgresBackend(DatabaseInterface):
             return True
         except Exception:
             return False
+
+    # ------------------------------------------------------------------
+    # Query performance tools (see nexusql/performance.py)
+    # ------------------------------------------------------------------
+
+    async def explain(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+        analyze: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        PostgreSQL's plan for ``query``: ``EXPLAIN``, or ``EXPLAIN (ANALYZE,
+        FORMAT TEXT)`` with ``analyze=True``, one row per plan line.
+
+        Rows carry the ``QUERY PLAN`` column plus the normalised ``plan``
+        column shared with ``DatabaseManager.explain``. ``analyze=True``
+        executes the statement, so only SELECT statements are accepted.
+        Outside a transaction the connection is rolled back afterwards; a
+        plan is never worth keeping a transaction open for.
+        """
+        if analyze:
+            check_analyzable(query)
+        sql, args = self._prepare(
+            explain_sql(DatabaseType.POSTGRESQL, query, analyze), params)
+        async with self._borrow() as conn:
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql, args)
+                    rows = await cur.fetchall() if cur.description else []
+            finally:
+                if self._pinned_conn is None:
+                    await conn.rollback()
+        return with_plan(DatabaseType.POSTGRESQL, [dict(r) for r in rows])
+
+    def query_stats(self) -> List[QueryStat]:
+        """Per-statement aggregates; needs ``collect_stats=True``."""
+        if self._monitor is None or not self._monitor.collect_stats:
+            raise RuntimeError(
+                "query_stats() needs AsyncPostgresBackend(..., collect_stats=True)")
+        return self._monitor.query_stats()
+
+    def reset_query_stats(self) -> None:
+        """Forget the aggregates collected so far."""
+        if self._monitor is not None:
+            self._monitor.reset_query_stats()
