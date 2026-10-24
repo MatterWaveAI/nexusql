@@ -50,6 +50,19 @@ from .manager import (
     single_primary_key,
     with_returning,
 )
+from .schema import (
+    ExpectedSchema,
+    TableInfo,
+    TableNotFoundError,
+    ValidationReport,
+    build_report,
+    coerce_specs,
+    pg_columns_query,
+    pg_indexes_query,
+    pg_resolve_name,
+    pg_table_info,
+    pg_tables_query,
+)
 
 try:
     import psycopg
@@ -412,6 +425,40 @@ class AsyncPostgresBackend(DatabaseInterface):
         except Exception as exc:
             logger.error(f"table_exists failed: {exc}")
             return False
+
+    # ------------------------------------------------------------------
+    # Schema introspection and validation (nexusql/schema.py)
+    # ------------------------------------------------------------------
+
+    async def list_tables(self) -> List[str]:
+        """Names of the base tables in the current schema."""
+        sql, params = pg_tables_query()
+        return [row['table_name'] for row in await self.execute(sql, params or None)]
+
+    async def introspect(self, table: str) -> TableInfo:
+        """
+        Columns and indexes of ``table``, as ``DatabaseManager.introspect``
+        reports them. Raises ``TableNotFoundError`` for an absent table.
+        """
+        schema, name = pg_resolve_name(table)
+        sql, params = pg_columns_query(schema, name)
+        columns = await self.execute(sql, params)
+        if not columns:
+            raise TableNotFoundError(f"table {table} does not exist")
+        sql, params = pg_indexes_query(schema, name)
+        return pg_table_info(table, columns, await self.execute(sql, params))
+
+    async def validate_schema(self, expected: ExpectedSchema,
+                              strict: bool = False) -> ValidationReport:
+        """Compare the live schema with ``expected``; see ``DatabaseManager.validate_schema``."""
+        specs = coerce_specs(expected)
+        tables = {}
+        for spec in specs:
+            try:
+                tables[spec.name] = await self.introspect(spec.name)
+            except TableNotFoundError:
+                tables[spec.name] = None
+        return build_report(specs, tables, DatabaseType.POSTGRESQL, strict=strict)
 
     async def execute_script(self, script: str) -> QueryResult:
         """

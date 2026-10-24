@@ -14,6 +14,17 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .schema import (
+    ColumnInfo,
+    ColumnSpec,
+    IndexInfo,
+    IndexSpec,
+    SchemaValidationError,
+    TableInfo,
+    TableNotFoundError,
+    TableSpec,
+    ValidationReport,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +50,15 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'ColumnInfo',
+    'ColumnSpec',
+    'IndexInfo',
+    'IndexSpec',
+    'SchemaValidationError',
+    'TableInfo',
+    'TableNotFoundError',
+    'TableSpec',
+    'ValidationReport',
 ]
 
 if PSYCOPG_AVAILABLE:

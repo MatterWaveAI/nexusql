@@ -174,7 +174,7 @@ The following features are **not yet implemented** but may be needed for future 
 | **Encryption/Compliance** | Column-level encryption, PII masking, GDPR | 12-16h | Low |
 | **Query Builder/ORM** | Type-safe query builder for better DX | 16-24h | Low |
 | **Test Fixtures** | Data factories, snapshots for testing | 8-12h | Low |
-| **Schema Validation** | Runtime type checking and validation | 10-14h | Low |
+| ~~Schema Validation~~ | Done: `introspect` / `list_tables` / `validate_schema` / `check_params`, see [SCHEMA_VALIDATION.md](SCHEMA_VALIDATION.md) | — | Done |
 
 ### ❌ Not Applicable / Out of Scope
 - **Analytics/OLAP** - Use dedicated analytics databases (ClickHouse, BigQuery)
@@ -210,7 +210,7 @@ The following features are **not yet implemented** but may be needed for future 
 14. Encryption/compliance
 15. Query builder API
 16. Test data factories
-17. Schema validation
+17. ✅ Schema validation - **DONE** (see [SCHEMA_VALIDATION.md](SCHEMA_VALIDATION.md))
 
 ---
 
