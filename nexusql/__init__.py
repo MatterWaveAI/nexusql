@@ -13,7 +13,13 @@ from .interfaces import (
     create_error_result
 )
 
-from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .migrations import (
+    MigrationRunner,
+    MigrationChecksumMismatch,
+    MigrationRollbackError,
+    MigrationRecord,
+    RollbackStep,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +45,9 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'MigrationRollbackError',
+    'MigrationRecord',
+    'RollbackStep',
 ]
 
 if PSYCOPG_AVAILABLE:

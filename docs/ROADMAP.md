@@ -162,7 +162,7 @@ The following features are **not yet implemented** but may be needed for future 
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
 | **Row-Level Security** | Multi-tenancy support with automatic filtering | 8-12h | Medium |
-| **Migration Rollback** | Down migrations for production safety | 6-8h | Medium |
+| ~~Migration Rollback~~ | Done: `MigrationRunner.rollback()`, `rollback_to()`, `plan_rollback()`, see [MIGRATIONS.md](MIGRATIONS.md) | — | Done |
 | **Backup/Recovery** | Database backup, restore, point-in-time recovery | 10-14h | Medium |
 | **Full-Text Search** | Full-text indexes, search ranking, fuzzy matching | 12-16h | Medium |
 
@@ -200,7 +200,7 @@ The following features are **not yet implemented** but may be needed for future 
 
 ### Phase 3: Advanced Features (36-50 hours)
 8. Row-level security helpers
-9. Migration rollback support
+9. ✅ Migration rollback support - **DONE**
 10. Backup/restore utilities
 11. Full-text search support
 

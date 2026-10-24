@@ -241,6 +241,45 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 ```
 
+### Rolling back
+
+A migration can be undone when it ships a down script, either as a sibling
+file or as a `-- down` section at the end of the migration itself:
+
+```
+migrations/
+  V001__create_users_table.sql
+  V001__create_users_table.down.sql   # sibling file
+  V002__add_status.sql                # ...or a "-- down" section inside
+```
+
+```sql
+-- V002__add_status.sql
+ALTER TABLE users ADD COLUMN status VARCHAR(20);
+
+-- down
+ALTER TABLE users DROP COLUMN status;
+```
+
+```python
+from nexusql import MigrationRunner
+
+runner = MigrationRunner(db, Path("path/to/your/migrations"))
+
+await runner.plan_rollback(steps=2)        # what would run, newest first
+await runner.rollback()                    # undo the newest migration
+await runner.rollback_to("V001__create_users_table")  # undo everything after V001
+await runner.applied()                     # MigrationRecord list
+await runner.pending()                     # files not yet applied
+```
+
+Rollback refuses up front, before touching anything, when any migration in
+the plan has no down script. A down script is checksummed when the migration
+is applied; changing it afterwards warns at rollback time and the current
+script runs. Changing the up script still blocks, as before. See
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md) for the details and per-backend
+transaction behaviour.
+
 ## Named Parameters
 
 NexusQL enforces named parameters for security and clarity:
