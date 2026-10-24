@@ -50,6 +50,12 @@ from .manager import (
     single_primary_key,
     with_returning,
 )
+from .savepoints import (
+    run_statements_async,
+    savepoint_name,
+    savepoint_sql,
+    validate_nested,
+)
 
 try:
     import psycopg
@@ -441,24 +447,39 @@ class AsyncPostgresBackend(DatabaseInterface):
     # ------------------------------------------------------------------
 
     @asynccontextmanager
-    async def transaction(self):
+    async def transaction(self, nested: str = "savepoint"):
         """
         Run a block inside a database transaction.
 
         Commits on clean exit, rolls back if the block raises. The connection
         is pinned for the duration, so every statement in the block runs on
-        the same one. Nested use joins the outermost transaction rather than
-        opening a second.
+        the same one.
 
             async with backend.transaction():
                 await backend.execute("INSERT INTO ...")
+
+        A block opened inside another becomes a savepoint, as on the sync
+        manager: if it raises, only its own statements are undone and the
+        exception propagates to the outer block, which decides whether to
+        carry on. ``nested="join"`` restores the earlier behaviour, where the
+        inner block simply runs inside the outer transaction. The outermost
+        block commits and rolls back exactly as before.
+
+        Args:
+            nested: ``"savepoint"`` (default) or ``"join"``; ignored for the
+                outermost block.
         """
+        validate_nested(nested)
         if self._pinned_conn is not None:
-            self._depth += 1
-            try:
+            if nested == "join":
+                self._depth += 1
+                try:
+                    yield self
+                finally:
+                    self._depth -= 1
+                return
+            async with self._savepoint():
                 yield self
-            finally:
-                self._depth -= 1
             return
 
         pool = self._ensure_pool()
@@ -482,6 +503,36 @@ class AsyncPostgresBackend(DatabaseInterface):
             self._pinned_conn = None
             self._depth = 0
             await pool.putconn(conn)
+
+    @asynccontextmanager
+    async def _savepoint(self):
+        """
+        Run a nested transaction() block as a savepoint on the pinned connection.
+
+        Mirrors ``DatabaseManager._savepoint``: the nesting depth names the
+        savepoint, and a failing ROLLBACK TO is logged rather than raised so
+        the block's own exception reaches the caller. psycopg opens the
+        transaction on the first statement, so SAVEPOINT may safely be the
+        first thing the outer block runs.
+        """
+        conn = self._pinned_conn
+        self._depth += 1
+        try:
+            sql = savepoint_sql(DatabaseType.POSTGRESQL, savepoint_name(self._depth))
+            await run_statements_async(conn, sql.begin)
+            try:
+                yield self
+            except Exception:
+                try:
+                    await run_statements_async(conn, sql.rollback)
+                    await run_statements_async(conn, sql.release)
+                except Exception:
+                    logger.debug("Rollback to %s failed", sql.name, exc_info=True)
+                raise
+            else:
+                await run_statements_async(conn, sql.release)
+        finally:
+            self._depth -= 1
 
     async def health_check(self) -> bool:
         """True if a trivial query succeeds."""

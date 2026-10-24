@@ -92,8 +92,52 @@ with db.transaction():
                {"amt": 100, "id": 2})
 ```
 
-Nesting joins the outermost transaction rather than opening a second one, so
-a helper that opens a transaction can safely be called from inside another.
+### Nested transactions and savepoints
+
+A `transaction()` block opened inside another becomes a savepoint. If the
+inner block raises, only its own statements are undone; the exception then
+propagates to the outer block, which decides whether to carry on or let the
+whole transaction roll back. The outermost block commits and rolls back
+exactly as before.
+
+```python
+with db.transaction():
+    db.execute("INSERT INTO orders (id, total) VALUES (:id, :total)",
+               {"id": 7, "total": 99})
+    try:
+        with db.transaction():
+            db.execute("INSERT INTO audit (order_id) VALUES (:id)", {"id": 7})
+            db.execute("INSERT INTO audit (order_id) VALUES (:id)", {"id": 7})
+    except IntegrityError:
+        pass          # the audit rows are gone; the order survives
+    db.execute("UPDATE orders SET status = 'open' WHERE id = :id", {"id": 7})
+# commit: orders has the row, audit has nothing
+```
+
+Savepoints nest to any depth; each level is named after its depth
+(`sp_2`, `sp_3`, ...). On SQLite, PostgreSQL and MySQL the manager issues
+`SAVEPOINT` / `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT`; on SQL Server
+`SAVE TRANSACTION` / `ROLLBACK TRANSACTION name`, which has no release step.
+Two dialect details are handled for you: SQLite would otherwise commit on
+release when the nested block is the first statement of the outer block, so
+the manager opens the outer transaction explicitly first; and SQL Server
+refuses `SAVE TRANSACTION` with no transaction active, so the manager starts
+the implicit one when the savepoint is the first statement.
+
+In earlier releases a nested block simply joined the outer transaction, and
+a failed statement inside it rolled back everything. That behaviour is still
+available with `nested="join"`:
+
+```python
+with db.transaction():
+    with db.transaction(nested="join"):   # no savepoint; one transaction
+        ...
+```
+
+Inside a savepoint a failed statement no longer rolls back the connection;
+the savepoint is rolled back instead and the outer block's work is kept. In
+the outermost block (and in `nested="join"` blocks) a failed statement rolls
+the connection back, as it always has.
 
 The transaction is scoped to the calling thread, so two threads can run
 independent transactions through the same manager.
@@ -314,10 +358,18 @@ user_id = await db.execute(
     "INSERT INTO users (email) VALUES (:email)", {"email": "b@c.d"},
     return_id=True)
 
-# Explicit transaction (commits on clean exit, rolls back on error)
+# Explicit transaction (commits on clean exit, rolls back on error). A block
+# nested inside another is a savepoint, as on the sync manager; pass
+# nested="join" to run inside the outer transaction with no savepoint.
 async with db.transaction():
     await db.execute("INSERT INTO users (email) VALUES (:email)",
                      {"email": "x@y.z"})
+    try:
+        async with db.transaction():
+            await db.execute("INSERT INTO users (email) VALUES (:email)",
+                             {"email": "x@y.z"})   # duplicate
+    except psycopg.errors.UniqueViolation:
+        pass                                       # first insert survives
 
 # execute("BEGIN") raises RuntimeError, as on the sync manager: a BEGIN sent
 # through execute would run on whichever pooled connection it borrowed and be
@@ -442,6 +494,14 @@ user_id = db.execute(
     return_id=True)
 ```
 Execute query with named parameters. Returns list of dicts for SELECT, empty list for INSERT/UPDATE/DELETE.
+
+#### `transaction(nested="savepoint")`
+Context manager that commits on clean exit and rolls back if the block
+raises. A block nested inside another becomes a savepoint: its own
+statements are undone if it raises, the outer block's survive, and the
+exception propagates. `nested="join"` runs the inner block inside the outer
+transaction with no savepoint, as earlier releases did. See
+[Transactions](#transactions).
 
 #### `fetch_one(query, params=None) -> Optional[Dict]`
 Fetch single row with named parameters. `None` means the query succeeded and matched no rows; errors raise.

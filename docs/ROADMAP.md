@@ -154,7 +154,7 @@ The following features are **not yet implemented** but may be needed for future 
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
 | ~~Connection Pooling~~ | Done in 0.3.0: pooled server backends, see [POOLING_DESIGN.md](POOLING_DESIGN.md) | — | Done |
-| **Savepoints** | `transaction()` shipped in 0.3.0; nested use joins the outer transaction, so savepoints remain | 4-6h | High |
+| ~~Savepoints~~ | Done: a nested `transaction()` block is a savepoint (`nested="join"` keeps the old behaviour), see [README: Nested transactions and savepoints](../README.md#nested-transactions-and-savepoints) | — | Done |
 | **Streaming Results** | Yield large result sets in chunks (avoid memory issues) | 6-8h | High |
 | **Query Performance Tools** | Slow query logging, EXPLAIN analysis | 4-6h | High |
 
@@ -194,7 +194,7 @@ The following features are **not yet implemented** but may be needed for future 
 
 ### Phase 2: Production Readiness (30-42 hours)
 4. ✅ Connection pooling - **DONE** (0.3.0)
-5. Savepoints for nested `transaction()` (the context manager itself is done in 0.3.0)
+5. ✅ Savepoints for nested `transaction()` - **DONE**
 6. Streaming query results
 7. Slow query logging
 

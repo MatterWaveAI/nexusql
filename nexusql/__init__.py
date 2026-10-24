@@ -14,6 +14,7 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .savepoints import NESTED_MODES, SavepointSQL, savepoint_sql
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +40,9 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'NESTED_MODES',
+    'SavepointSQL',
+    'savepoint_sql',
 ]
 
 if PSYCOPG_AVAILABLE:
