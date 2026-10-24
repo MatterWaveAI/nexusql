@@ -1463,6 +1463,57 @@ class DatabaseManager:
             logger.error(f"Script execution failed: {e}")
             return QueryResult(success=False, data=[], row_count=0, error_message=str(e))
 
+    # ------------------------------------------------------------------
+    # Backup and restore; the implementation lives in nexusql/backup.py
+    # ------------------------------------------------------------------
+
+    def backup(self, path: str, tables: Optional[List[str]] = None) -> str:
+        """
+        Write a native backup of this database to ``path`` and return it.
+
+        SQLite uses the online backup API; PostgreSQL runs ``pg_dump``
+        (custom format) and MySQL ``mysqldump``, with the password passed
+        through the environment; SQL Server runs ``BACKUP DATABASE``, where
+        ``path`` is a path on the server. ``tables`` narrows a PostgreSQL or
+        MySQL dump and is rejected for the whole-database backends. Needs
+        the client binary on PATH for the server backends; export_tables()
+        is the portable alternative. See docs/BACKUP_RECOVERY.md.
+        """
+        from .backup import backup_database
+        return backup_database(self, path, tables)
+
+    def restore(self, path: str, *, replace: bool = False) -> None:
+        """
+        Restore a backup written by backup() into this database.
+
+        ``replace`` drops objects that already exist before recreating
+        them (``pg_restore --clean --if-exists``, SQL Server ``WITH
+        REPLACE``). SQL Server needs exclusive access to the database and
+        the restore is issued from a connection to master; this manager's
+        pool is closed for the duration and reopened afterwards.
+        """
+        from .backup import restore_database
+        restore_database(self, path, replace=replace)
+
+    def export_tables(self, path: str, tables: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Portable export: one JSON-lines file per table plus a manifest,
+        written under the directory ``path``. Needs no external binary and
+        reads back on any backend. Returns the manifest.
+        """
+        from .backup import export_tables
+        return export_tables(self, path, tables)
+
+    def import_tables(self, path: str, truncate: bool = False,
+                      tables: Optional[List[str]] = None) -> Dict[str, int]:
+        """
+        Load an export_tables() directory with parameterised INSERTs, one
+        transaction per table. ``truncate`` deletes existing rows first.
+        Tables must already exist. Returns rows inserted per table.
+        """
+        from .backup import import_tables
+        return import_tables(self, path, truncate=truncate, tables=tables)
+
     def __enter__(self):
         """Context manager entry"""
         self.connect()

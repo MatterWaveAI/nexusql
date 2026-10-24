@@ -163,7 +163,7 @@ The following features are **not yet implemented** but may be needed for future 
 |---------|-------------|--------|----------|
 | **Row-Level Security** | Multi-tenancy support with automatic filtering | 8-12h | Medium |
 | ~~Migration Rollback~~ | Done: `MigrationRunner.rollback()`, `rollback_to()`, `plan_rollback()`, see [MIGRATIONS.md](MIGRATIONS.md) | — | Done |
-| **Backup/Recovery** | Database backup, restore, point-in-time recovery | 10-14h | Medium |
+| ~~Backup/Recovery~~ | Done: native `backup()`/`restore()` on every backend plus portable `export_tables()`/`import_tables()`, see [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md). Point-in-time recovery is server-side and out of scope | — | Done |
 | **Full-Text Search** | Full-text indexes, search ranking, fuzzy matching | 12-16h | Medium |
 
 ### 🟢 Low Priority (Scale & Advanced)
@@ -201,7 +201,7 @@ The following features are **not yet implemented** but may be needed for future 
 ### Phase 3: Advanced Features (36-50 hours)
 8. Row-level security helpers
 9. ✅ Migration rollback support - **DONE**
-10. Backup/restore utilities
+10. ✅ Backup/restore utilities - **DONE** ([BACKUP_RECOVERY.md](BACKUP_RECOVERY.md))
 11. Full-text search support
 
 ### Phase 4: Scale & Enterprise (80-120 hours)

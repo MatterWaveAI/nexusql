@@ -81,3 +81,15 @@ def __getattr__(name):
         from . import testing
         return getattr(testing, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# feature/backup-recovery
+
+from .backup import (
+    BackupError,
+    BackupToolNotFound,
+)
+
+__all__ += [
+    'BackupError',
+    'BackupToolNotFound',
+]

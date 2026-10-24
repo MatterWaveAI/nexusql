@@ -314,6 +314,33 @@ finally:
 await db.close()
 ```
 
+## Backup and Restore
+
+Two layers, same four calls on every backend:
+
+```python
+# Native: the database's own format. SQLite uses the online backup API;
+# PostgreSQL runs pg_dump/pg_restore (custom format) and MySQL
+# mysqldump/mysql, with the password passed through the environment and
+# never on the command line; SQL Server runs BACKUP/RESTORE DATABASE,
+# where the path is on the server.
+db.backup("backups/app.dump")
+db.restore("backups/app.dump", replace=True)   # drop existing objects first
+
+# Portable: JSON lines plus a manifest, no external binary, loads into any
+# backend whose tables exist. Bytes, datetimes, Decimal and UUID survive.
+db.export_tables("backups/2024-05-06", tables=["users", "orders"])
+db.import_tables("backups/2024-05-06", truncate=True)
+```
+
+`backup(tables=[...])` narrows a PostgreSQL or MySQL dump; SQLite and SQL
+Server backups are whole-database and reject it. A missing client binary
+raises `BackupToolNotFound` naming it. `import_tables` runs one transaction
+per table and re-syncs PostgreSQL sequences so the next plain INSERT gets a
+fresh key. Point-in-time recovery is a server-side concern (WAL archiving,
+binlogs, log backups) and is not provided. Details, per-backend behaviour
+and limits: [docs/BACKUP_RECOVERY.md](docs/BACKUP_RECOVERY.md).
+
 ## Async Backend
 
 The sync `DatabaseManager` blocks: calling it from inside `async def` code
@@ -569,6 +596,18 @@ Check if table exists.
 
 #### `async execute_script(script) -> QueryResult`
 Execute multiple SQL statements.
+
+#### `backup(path, tables=None) -> str`
+Native backup to `path` (SQLite online backup API, `pg_dump`, `mysqldump`, `BACKUP DATABASE`). See [docs/BACKUP_RECOVERY.md](docs/BACKUP_RECOVERY.md).
+
+#### `restore(path, *, replace=False)`
+Restore a `backup()` file. `replace` drops existing objects first (`pg_restore --clean --if-exists`, SQL Server `WITH REPLACE`).
+
+#### `export_tables(path, tables=None) -> dict`
+Portable JSON-lines export under the directory `path`; returns the manifest.
+
+#### `import_tables(path, truncate=False, tables=None) -> dict`
+Load an export with parameterised INSERTs, one transaction per table; returns rows inserted per table.
 
 ## Testing
 
