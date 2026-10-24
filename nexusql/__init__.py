@@ -55,3 +55,17 @@ __all__ = [
 
 if PSYCOPG_AVAILABLE:
     __all__ += ['AsyncPostgresBackend']
+
+# feature/migration-rollback
+
+from .migrations import (
+    MigrationRollbackError,
+    MigrationRecord,
+    RollbackStep,
+)
+
+__all__ += [
+    'MigrationRollbackError',
+    'MigrationRecord',
+    'RollbackStep',
+]
