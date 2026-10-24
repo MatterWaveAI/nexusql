@@ -350,6 +350,39 @@ else:
     """)
 ```
 
+## Testing Helpers
+
+`nexusql.testing` gives application test suites data factories, table
+snapshots and a dialect-aware `truncate`, plus pytest fixtures that ship as
+a plugin (no conftest line needed once nexusql is installed):
+
+```python
+from nexusql.testing import Factory, Sequence, SubFactory, snapshot, truncate
+
+accounts = Factory("accounts", name=Sequence("Account {n}"))
+users = Factory("users", email=Sequence("user{n}@example.com"),
+                active=True, account_id=SubFactory(accounts))
+
+def test_rename(nexusql_tx):                 # the test runs in one transaction,
+    row = users.create(nexusql_tx)           # rolled back at teardown
+    snap = snapshot(nexusql_tx, ["accounts", "users"])
+
+    rename_user(nexusql_tx, row["id"], "Alice")
+
+    diff = snap.diff(nexusql_tx)
+    assert set(diff["users"].changed) == {row["id"]}
+    snap.restore(nexusql_tx)                 # truncate, re-insert, fix the key counters
+
+truncate(db, ["accounts", "users"])          # TRUNCATE .. RESTART IDENTITY on
+                                             # PostgreSQL, DELETE + sqlite_sequence
+                                             # on SQLite, and so on
+```
+
+`nexusql_db` connects to `--nexusql-url`, else `$NEXUSQL_TEST_URL`, else a
+SQLite file in `tmp_path`, and skips when a server is unreachable;
+`nexusql_sqlite` is always a fresh SQLite file. Importing `nexusql` or
+`nexusql.testing` does not import pytest. See [docs/TESTING.md](docs/TESTING.md).
+
 ## Advanced Features
 
 ### Running SQL Scripts

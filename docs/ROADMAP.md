@@ -173,7 +173,7 @@ The following features are **not yet implemented** but may be needed for future 
 | **Change Data Capture** | Track all changes for audit/event sourcing | 16-20h | Low |
 | **Encryption/Compliance** | Column-level encryption, PII masking, GDPR | 12-16h | Low |
 | **Query Builder/ORM** | Type-safe query builder for better DX | 16-24h | Low |
-| **Test Fixtures** | Data factories, snapshots for testing | 8-12h | Low |
+| ~~Test Fixtures~~ | Done: `nexusql.testing` factories, snapshots, `truncate` and the pytest plugin, see [TESTING.md](TESTING.md) | — | Done |
 | **Schema Validation** | Runtime type checking and validation | 10-14h | Low |
 
 ### ❌ Not Applicable / Out of Scope
@@ -209,7 +209,7 @@ The following features are **not yet implemented** but may be needed for future 
 13. Change data capture
 14. Encryption/compliance
 15. Query builder API
-16. Test data factories
+16. ✅ Test data factories - **DONE** ([TESTING.md](TESTING.md))
 17. Schema validation
 
 ---
@@ -228,8 +228,5 @@ search = [
 ]
 validation = [
     "pydantic>=2.0.0"  # For schema validation
-]
-testing = [
-    "faker>=20.0.0"  # For test data generation
 ]
 ```

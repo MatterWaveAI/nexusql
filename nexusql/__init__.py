@@ -43,3 +43,15 @@ __all__ = [
 
 if PSYCOPG_AVAILABLE:
     __all__ += ['AsyncPostgresBackend']
+
+# Test helpers (nexusql.testing) resolve on first use, so applications that
+# never test through nexusql do not pay for importing them.
+_TESTING_EXPORTS = ('Factory', 'Sequence', 'SubFactory', 'Snapshot', 'snapshot', 'truncate')
+__all__ += list(_TESTING_EXPORTS)
+
+
+def __getattr__(name):
+    if name in _TESTING_EXPORTS:
+        from . import testing
+        return getattr(testing, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

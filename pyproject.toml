@@ -52,9 +52,14 @@ Documentation = "https://github.com/matterwaveai/nexusql#readme"
 Repository = "https://github.com/matterwaveai/nexusql"
 Issues = "https://github.com/matterwaveai/nexusql/issues"
 
+# The pytest fixtures ship as a plugin so they are available to any suite
+# that installs nexusql, without a conftest import.
+[project.entry-points.pytest11]
+nexusql = "nexusql.testing.pytest_plugin"
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nexusql"]
+include = ["nexusql", "nexusql.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
