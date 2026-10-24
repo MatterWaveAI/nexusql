@@ -50,6 +50,17 @@ from .manager import (
     single_primary_key,
     with_returning,
 )
+from .tenancy import (
+    PG_COLUMN_TYPE_SQL,
+    SET_TENANT_SQL,
+    check_identifier,
+    column_type_from_row,
+    disable_row_security_statements,
+    row_security_statements,
+    scoped_name,
+    tenant_value,
+    unquote,
+)
 
 try:
     import psycopg
@@ -159,6 +170,8 @@ class AsyncPostgresBackend(DatabaseInterface):
         self._depth = 0
         # Primary-key column per table, for execute(..., return_id=True).
         self._pk_cache: Dict[str, str] = {}
+        # Tenant set by the innermost active tenant() block.
+        self._tenant_id: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -482,6 +495,78 @@ class AsyncPostgresBackend(DatabaseInterface):
             self._pinned_conn = None
             self._depth = 0
             await pool.putconn(conn)
+
+    # ------------------------------------------------------------------
+    # Row-level security / multi-tenancy (see tenancy.py)
+    # ------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def tenant(self, tenant_id):
+        """
+        Set the current tenant for the duration of one transaction.
+
+        Runs ``set_config('app.tenant_id', .., true)`` on the pinned
+        connection, so the value is local to the transaction and gone when
+        it ends. Opens a transaction if none is open; nested inside one, it
+        joins it and writes the previous tenant back on exit, since the
+        transaction end that would revert it has not happened yet.
+
+            async with db.tenant(tenant_id):
+                rows = await db.execute(f"SELECT * FROM {db.scoped('orders')}")
+        """
+        value = tenant_value(tenant_id)
+        joined = self._pinned_conn is not None
+        set_sql = SET_TENANT_SQL[DatabaseType.POSTGRESQL]
+
+        async with self.transaction():
+            previous, self._tenant_id = self._tenant_id, value
+            try:
+                await self.execute(set_sql, {"tenant_id": value})
+                yield self
+            finally:
+                self._tenant_id = previous
+                if joined:
+                    try:
+                        await self.execute(set_sql, {"tenant_id": previous or ''})
+                    except Exception:
+                        # Only reachable after the block failed; the rollback
+                        # reverts the setting anyway.
+                        logger.debug("could not restore previous tenant", exc_info=True)
+
+    @property
+    def current_tenant(self) -> Optional[str]:
+        """Tenant set by the innermost ``tenant()`` block, or None."""
+        return self._tenant_id
+
+    async def enable_row_security(self, table: str, tenant_column: str = "tenant_id") -> None:
+        """
+        Enable and force row-level security on ``table`` with a policy
+        comparing ``tenant_column`` to the tenant set by ``tenant()``, for
+        SELECT, INSERT, UPDATE and DELETE. Grants on the table are still the
+        caller's job; superusers bypass the policy regardless.
+        """
+        table = check_identifier(table, qualified=True)
+        tenant_column = check_identifier(tenant_column)
+        async with self.transaction():
+            rows = await self.execute(
+                PG_COLUMN_TYPE_SQL, {"table": table, "column": unquote(tenant_column)}
+            )
+            column_type = column_type_from_row(rows[0] if rows else None, table, tenant_column)
+            statements = row_security_statements(
+                DatabaseType.POSTGRESQL, table, tenant_column, column_type
+            )
+            for statement in statements:
+                await self.execute(statement)
+
+    async def disable_row_security(self, table: str) -> None:
+        """Drop the policy and turn row-level security off for ``table``."""
+        async with self.transaction():
+            for statement in disable_row_security_statements(DatabaseType.POSTGRESQL, table):
+                await self.execute(statement)
+
+    def scoped(self, table: str) -> str:
+        """The name to query: on PostgreSQL the policy filters the table itself."""
+        return scoped_name(DatabaseType.POSTGRESQL, table)
 
     async def health_check(self) -> bool:
         """True if a trivial query succeeds."""

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
+from . import tenancy
 
 try:
     import psycopg
@@ -346,6 +347,65 @@ class DatabaseManager:
             self._state.current = None
             self._pool.release(conn, discard=discard)
 
+    # ------------------------------------------------------------------
+    # Row-level security / multi-tenancy (see tenancy.py)
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def tenant(self, tenant_id):
+        """
+        Set the current tenant for the duration of one transaction.
+
+        Opens a transaction if none is open; nested inside one, it joins it
+        and restores the previous tenant on exit. The value is stored on the
+        pinned connection, in whatever form the backend offers (PostgreSQL
+        ``set_config('app.tenant_id', ..)`` local to the transaction, a MySQL
+        user variable, SQL Server session context, a SQLite function), so
+        every statement in the block sees it and nothing outside does.
+
+            db.enable_row_security("orders")
+            with db.tenant(tenant_id):
+                rows = db.execute(f"SELECT * FROM {db.scoped('orders')}")
+
+        Only PostgreSQL enforces the tenant on the table itself; the other
+        backends filter through the ``<table>_scoped`` view that
+        ``scoped()`` names. See docs/ROW_LEVEL_SECURITY.md for the boundary
+        each backend provides.
+        """
+        with tenancy.tenant_scope(self, tenant_id):
+            yield self
+
+    @property
+    def current_tenant(self) -> Optional[str]:
+        """Tenant set by the innermost ``tenant()`` block on this thread, or None."""
+        return getattr(self._state, 'tenant_id', None)
+
+    def enable_row_security(self, table: str, tenant_column: str = "tenant_id") -> None:
+        """
+        Scope ``table`` to the tenant set by ``tenant()``.
+
+        PostgreSQL: enables and forces row-level security on the table and
+        creates a policy comparing ``tenant_column`` to the session setting
+        for SELECT, INSERT, UPDATE and DELETE. Grants on the table are still
+        the caller's job; superusers bypass the policy regardless.
+
+        MySQL, SQL Server, SQLite: creates a ``<table>_scoped`` view that
+        filters on the session value. The table itself stays unfiltered.
+
+        Idempotent: calling it again replaces the policy or view.
+        """
+        tenancy.enable_row_security(self, table, tenant_column)
+
+    def disable_row_security(self, table: str) -> None:
+        """Drop the policy (and row security) or the view created by enable_row_security()."""
+        tenancy.disable_row_security(self, table)
+
+    def scoped(self, table: str) -> str:
+        """
+        Name to query for tenant-scoped rows: ``table`` on PostgreSQL, where
+        the policy filters the table, and the ``<table>_scoped`` view elsewhere.
+        """
+        return tenancy.scoped_name(self.config.database_type, table)
 
     async def initialize(self, apply_schema: bool = True, app_migration_paths: Optional[List[str]] = None) -> bool:
         """
@@ -411,6 +471,13 @@ class DatabaseManager:
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        # SQLite has no session variables, so the views built by
+        # enable_row_security() read the tenant through this function. The
+        # value is kept per thread on the manager, alongside the transaction
+        # that set it, and sqlite3 connections are thread-bound anyway.
+        conn.create_function(
+            "app_tenant_id", 0, lambda: getattr(self._state, 'tenant_id', None)
+        )
         return conn
 
     def _make_mysql_connection(self):

@@ -10,6 +10,7 @@ Multi-database abstraction layer with unified API for PostgreSQL, MySQL, SQLite,
 - ✅ **SQL Translation** - Write PostgreSQL canonical syntax, automatically translates to all databases
 - ✅ **Type Safety** - Full typing support with Python 3.10+
 - ✅ **Async Ready** - Async/await compatible API
+- ✅ **Multi-Tenancy** - `tenant()` + `enable_row_security()`: real row-level security on PostgreSQL, scoped views elsewhere
 - ✅ **Production Ready** - Comprehensive test coverage
 
 ## Installation
@@ -182,6 +183,41 @@ Set `pool_max=1` for the single-connection behavior of earlier versions.
 Exhausting the pool raises `PoolTimeout` after `pool_timeout` seconds rather
 than blocking indefinitely.
 
+## Row-Level Security
+
+Multi-tenant tables keep every tenant's rows together; the tenant filter
+belongs in the database session, not in every query. `enable_row_security`
+scopes a table to the tenant set by `tenant()`, and `scoped()` names what to
+query:
+
+```python
+db.enable_row_security("orders")             # once; tenant_column="tenant_id"
+
+with db.tenant(request.tenant_id):           # per request, one transaction
+    rows = db.execute(f"SELECT * FROM {db.scoped('orders')} WHERE status = :s",
+                      {"s": "open"})
+```
+
+What that enforces differs by backend, and the difference matters:
+
+- **PostgreSQL**: `ENABLE` + `FORCE ROW LEVEL SECURITY` and a policy for
+  SELECT/INSERT/UPDATE/DELETE on `current_setting('app.tenant_id')`. The
+  server filters the table for every client; a cross-tenant INSERT is
+  refused. Superusers always bypass row-level security and table owners
+  bypass it unless FORCE is on (it is), so connect the application as an
+  ordinary role. `scoped()` returns the table itself.
+- **MySQL, SQL Server, SQLite**: a `<table>_scoped` view filtering on the
+  session value (`@app_tenant_id` via a stored function,
+  `SESSION_CONTEXT(N'tenant_id')`, `app_tenant_id()`). Queries through the
+  view are tenant-scoped; queries against the table are not. A convenience
+  filter, not a security boundary.
+
+`tenant()` opens a transaction if none is open, so the value lives on the one
+pinned connection and is gone before it returns to the pool; nested blocks
+restore the outer tenant. With no tenant set, the policy and views match
+nothing. `AsyncPostgresBackend` offers the same calls. The full security
+boundary per backend is in [docs/ROW_LEVEL_SECURITY.md](docs/ROW_LEVEL_SECURITY.md).
+
 ## SQL Translation
 
 NexusQL uses PostgreSQL as the canonical SQL syntax and automatically translates to other databases:
@@ -323,6 +359,11 @@ async with db.transaction():
 # through execute would run on whichever pooled connection it borrowed and be
 # committed as that statement returned. transaction() is the supported way.
 
+# Row-level security, same shape as the sync manager (see docs/ROW_LEVEL_SECURITY.md)
+await db.enable_row_security("orders")
+async with db.tenant(tenant_id):
+    rows = await db.execute(f"SELECT * FROM {db.scoped('orders')}")
+
 print(await db.health_check())
 await db.disconnect()
 
@@ -451,6 +492,18 @@ Same as `fetch_one`, run in a worker thread for server backends so it does not b
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.
+
+#### `tenant(tenant_id)` (context manager)
+Set the tenant for one transaction (opened if none is open). PostgreSQL
+`set_config('app.tenant_id', .., true)`, MySQL `@app_tenant_id`, SQL Server
+`SESSION_CONTEXT`, SQLite `app_tenant_id()`. `current_tenant` reads it back.
+
+#### `enable_row_security(table, tenant_column="tenant_id")` / `disable_row_security(table)`
+PostgreSQL: force row-level security with a policy on `tenant_column`.
+Elsewhere: create a `<table>_scoped` view. See [docs/ROW_LEVEL_SECURITY.md](docs/ROW_LEVEL_SECURITY.md).
+
+#### `scoped(table) -> str`
+The name to query: `table` on PostgreSQL, `<table>_scoped` elsewhere.
 
 #### `async execute_script(script) -> QueryResult`
 Execute multiple SQL statements.

@@ -14,6 +14,13 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .tenancy import (
+    PG_TENANT_SETTING,
+    TENANT_POLICY_NAME,
+    disable_row_security_statements,
+    row_security_statements,
+    scoped_name,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +46,11 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'PG_TENANT_SETTING',
+    'TENANT_POLICY_NAME',
+    'disable_row_security_statements',
+    'row_security_statements',
+    'scoped_name',
 ]
 
 if PSYCOPG_AVAILABLE:

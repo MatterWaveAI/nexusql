@@ -161,7 +161,7 @@ The following features are **not yet implemented** but may be needed for future 
 ### 🟡 Medium Priority (Advanced Features)
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
-| **Row-Level Security** | Multi-tenancy support with automatic filtering | 8-12h | Medium |
+| ~~Row-Level Security~~ | Done: `tenant()` / `enable_row_security()` / `scoped()`; PostgreSQL policies, scoped views elsewhere, see [ROW_LEVEL_SECURITY.md](ROW_LEVEL_SECURITY.md) | — | Done |
 | **Migration Rollback** | Down migrations for production safety | 6-8h | Medium |
 | **Backup/Recovery** | Database backup, restore, point-in-time recovery | 10-14h | Medium |
 | **Full-Text Search** | Full-text indexes, search ranking, fuzzy matching | 12-16h | Medium |
@@ -199,7 +199,7 @@ The following features are **not yet implemented** but may be needed for future 
 7. Slow query logging
 
 ### Phase 3: Advanced Features (36-50 hours)
-8. Row-level security helpers
+8. ✅ Row-level security helpers - **DONE** ([ROW_LEVEL_SECURITY.md](ROW_LEVEL_SECURITY.md))
 9. Migration rollback support
 10. Backup/restore utilities
 11. Full-text search support
