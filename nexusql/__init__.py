@@ -14,6 +14,19 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .query import (
+    Q,
+    QueryError,
+    Expr,
+    Col,
+    Param,
+    Raw,
+    Statement,
+    Select,
+    Insert,
+    Update,
+    Delete,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +52,17 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'Q',
+    'QueryError',
+    'Expr',
+    'Col',
+    'Param',
+    'Raw',
+    'Statement',
+    'Select',
+    'Insert',
+    'Update',
+    'Delete',
 ]
 
 if PSYCOPG_AVAILABLE:

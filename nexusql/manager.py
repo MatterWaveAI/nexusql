@@ -9,9 +9,12 @@ import threading
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, TYPE_CHECKING
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .query import Statement
 
 try:
     import psycopg
@@ -1264,6 +1267,22 @@ class DatabaseManager:
         if self.config.database_type == DatabaseType.SQLITE:
             return self.fetch_one(query, params)
         return await asyncio.to_thread(self.fetch_one, query, params)
+
+    def run(self, query: 'Statement', return_id: bool = False) -> Any:
+        """
+        Run a statement built with the query builder (``nexusql.query.Q``).
+
+        The builder emits canonical SQL with ``:name`` parameters, so this is
+        ``execute(*query.build(), return_id=return_id)``: translation and
+        parameter handling are exactly those of a hand-written query.
+        """
+        sql, params = query.build()
+        return self.execute(sql, params, return_id=return_id)
+
+    def run_one(self, query: 'Statement') -> Optional[Dict]:
+        """``fetch_one`` for a query-builder statement."""
+        sql, params = query.build()
+        return self.fetch_one(sql, params)
 
     def create_table(self, table_name: str, schema: str):
         """Create a table with the given schema"""

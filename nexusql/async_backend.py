@@ -29,7 +29,7 @@ Requires the ``postgresql`` extra: ``pip install nexusql[postgresql]``
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .interfaces import (
     ConnectionConfig,
@@ -50,6 +50,9 @@ from .manager import (
     single_primary_key,
     with_returning,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .query import Statement
 
 try:
     import psycopg
@@ -398,6 +401,21 @@ class AsyncPostgresBackend(DatabaseInterface):
             logger.error(f"fetch_all failed: {exc}")
             raise
         return create_query_result(True, data=rows)
+
+    async def run(self, query: "Statement", return_id: bool = False) -> Any:
+        """Run a query-builder statement (``nexusql.query.Q``); see ``execute``."""
+        sql, params = query.build()
+        return await self.execute(sql, params, return_id=return_id)
+
+    async def run_one(self, query: "Statement") -> Optional[Dict[str, Any]]:
+        """
+        First row of a query-builder statement as a dict, or None.
+
+        Returns the row rather than a ``QueryResult`` so a builder statement
+        reads the same here as through ``DatabaseManager.run_one``.
+        """
+        rows = await self.run(query)
+        return rows[0] if rows else None
 
     async def table_exists(self, table_name: str) -> bool:
         """Check whether a table exists in the current schema."""

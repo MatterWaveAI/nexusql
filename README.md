@@ -256,6 +256,42 @@ db.execute(
 # db.execute(f"SELECT * FROM users WHERE email = '{email}'")  # SQL injection risk!
 ```
 
+## Query Builder
+
+For queries assembled from optional pieces (search filters, listings with a
+client-chosen sort order) `Q` builds the SQL so no value is ever concatenated
+into it. It emits the same canonical PostgreSQL SQL with `:name` parameters
+you would write by hand, so `execute()` translates it per backend as usual
+and the builder itself knows nothing about dialects:
+
+```python
+from nexusql import Q
+
+q = (Q.select("users").columns("id", "email")
+     .where((Q.col("age") >= Q.p("min_age", 18)) & Q.col("email").like("%@example.com"))
+     .order_by("-created_at").limit(10).offset(20))
+
+q.build()
+# ('SELECT id, email FROM users WHERE age >= :min_age AND email LIKE :p1 '
+#  'ORDER BY created_at DESC LIMIT 10 OFFSET 20',
+#  {'min_age': 18, 'p1': '%@example.com'})
+
+rows = db.run(q)                 # same as db.execute(*q.build())
+row = db.run_one(q)              # same as db.fetch_one(*q.build())
+
+user_id = Q.insert("users").values(email="a@b.c", name="A").execute(db, return_id=True)
+db.run(Q.update("users").set(name="B").where(Q.col("id") == user_id))
+db.run(Q.delete("users").where(Q.col("id").in_([user_id])))
+```
+
+Python values always become parameters (`:p1`, `:p2`, ... or the name given
+to `Q.p()`); identifiers must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`
+and anything else raises `QueryError` before the database is touched.
+`Q.raw()` is the only escape hatch and is for SQL you typed, never for
+input. Statements are immutable, so a base query can be shared and refined.
+Joins, `group_by`/`having`, `distinct` and the full set of predicates are
+described in [docs/QUERY_BUILDER.md](docs/QUERY_BUILDER.md).
+
 ## Connection Management
 
 ```python
@@ -448,6 +484,12 @@ Fetch single row with named parameters. `None` means the query succeeded and mat
 
 #### `async fetch_one_async(query, params=None) -> Optional[Dict]`
 Same as `fetch_one`, run in a worker thread for server backends so it does not block the event loop.
+
+#### `run(query, return_id=False) -> List[Dict] | Any`
+`execute()` for a query-builder statement: `db.run(Q.select("users"))`.
+
+#### `run_one(query) -> Optional[Dict]`
+`fetch_one()` for a query-builder statement.
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.

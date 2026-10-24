@@ -172,7 +172,7 @@ The following features are **not yet implemented** but may be needed for future 
 | **Sharding/Partitioning** | Horizontal scaling across multiple databases | 20-30h | Low |
 | **Change Data Capture** | Track all changes for audit/event sourcing | 16-20h | Low |
 | **Encryption/Compliance** | Column-level encryption, PII masking, GDPR | 12-16h | Low |
-| **Query Builder/ORM** | Type-safe query builder for better DX | 16-24h | Low |
+| ~~Query Builder/ORM~~ | Done: `nexusql.query.Q`, a typed builder emitting canonical `:name` SQL (no ORM), see [QUERY_BUILDER.md](QUERY_BUILDER.md) | — | Done |
 | **Test Fixtures** | Data factories, snapshots for testing | 8-12h | Low |
 | **Schema Validation** | Runtime type checking and validation | 10-14h | Low |
 
@@ -208,7 +208,7 @@ The following features are **not yet implemented** but may be needed for future 
 12. Database sharding framework
 13. Change data capture
 14. Encryption/compliance
-15. Query builder API
+15. ✅ Query builder API - **DONE** ([QUERY_BUILDER.md](QUERY_BUILDER.md))
 16. Test data factories
 17. Schema validation
 
