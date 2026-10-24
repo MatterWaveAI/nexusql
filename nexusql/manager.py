@@ -24,6 +24,13 @@ from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
 from .performance import QueryMonitor, QueryStat, QueryTiming, timed
 from . import performance as _performance
+from .savepoints import (
+    run_statements,
+    savepoint_name,
+    savepoint_sql,
+    transaction_open,
+    validate_nested,
+)
 
 try:
     import psycopg
@@ -336,26 +343,52 @@ class DatabaseManager:
         return False
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, nested: str = "savepoint"):
         """
         Run a block inside a database transaction.
 
         Commits on clean exit, rolls back if the block raises. The connection
         is pinned to the calling thread for the duration, so every statement
-        in the block runs on the same connection. Nested use joins the
-        outermost transaction rather than opening a second one.
+        in the block runs on the same connection.
 
             with db.transaction():
                 db.execute("INSERT INTO ...")
                 db.execute("UPDATE ...")
+
+        A block opened inside another becomes a savepoint: if it raises, only
+        its own statements are undone and the exception propagates to the
+        outer block, which decides whether to carry on or let the whole
+        transaction roll back. The outermost block commits and rolls back
+        exactly as before.
+
+            with db.transaction():
+                db.execute("INSERT INTO orders ...")
+                try:
+                    with db.transaction():
+                        db.execute("INSERT INTO audit ...")  # undone alone
+                except IntegrityError:
+                    pass                                     # order survives
+
+        Args:
+            nested: How a block nested inside another transaction behaves.
+                ``"savepoint"`` (default) is described above;
+                ``"join"`` restores the earlier behaviour, where the inner
+                block simply runs inside the outer transaction and a failure
+                leaves the outer block to roll everything back. Ignored for
+                the outermost block.
         """
+        validate_nested(nested)
         if self._pinned is not None:
-            # Already inside a transaction on this thread: join it.
-            self._state.depth += 1
-            try:
+            if nested == "join":
+                # Already inside a transaction on this thread: join it.
+                self._state.depth += 1
+                try:
+                    yield self
+                finally:
+                    self._state.depth -= 1
+                return
+            with self._savepoint():
                 yield self
-            finally:
-                self._state.depth -= 1
             return
 
         if self._pool is None:
@@ -439,6 +472,66 @@ class DatabaseManager:
         the policy filters the table, and the ``<table>_scoped`` view elsewhere.
         """
         return tenancy.scoped_name(self.config.database_type, table)
+    @contextmanager
+    def _savepoint(self):
+        """
+        Run a nested transaction() block as a savepoint on the pinned connection.
+
+        The nesting depth names the savepoint, so each level gets its own and
+        a name is free again once its block has finished. A failing ROLLBACK
+        TO is logged rather than raised: the block's own exception is the one
+        the caller needs, and the outer block's rollback cleans up after it.
+        """
+        conn = self._pinned
+        dialect = self.config.database_type
+        self._state.depth += 1
+        try:
+            sql = savepoint_sql(
+                dialect, savepoint_name(self._state.depth),
+                transaction_open=transaction_open(dialect, conn),
+            )
+            run_statements(conn, sql.begin)
+            self._state.savepoints = getattr(self._state, 'savepoints', 0) + 1
+            try:
+                yield self
+            except Exception:
+                try:
+                    run_statements(conn, sql.rollback)
+                    run_statements(conn, sql.release)
+                except Exception:
+                    logger.debug("Rollback to %s failed", sql.name, exc_info=True)
+                raise
+            else:
+                run_statements(conn, sql.release)
+            finally:
+                self._state.savepoints -= 1
+        finally:
+            self._state.depth -= 1
+
+    @property
+    def _in_savepoint(self) -> bool:
+        """True while this thread is inside a nested savepoint block."""
+        return getattr(self._state, 'savepoints', 0) > 0
+
+    def _rollback_after_error(self, conn) -> None:
+        """
+        Roll back after a failed statement so the connection is clean for
+        the next caller.
+
+        A failed statement leaves PostgreSQL in an aborted transaction state,
+        and without this every later query on that pooled connection would
+        fail too. Inside a savepoint the enclosing block recovers with
+        ROLLBACK TO SAVEPOINT instead; a full rollback here would discard
+        the outer block's work along with the failed statement's.
+        """
+        if self._in_savepoint:
+            return
+        try:
+            conn.rollback()
+            logger.debug("Rolled back transaction after error")
+        except Exception:
+            pass  # Ignore rollback errors
+
 
     async def initialize(self, apply_schema: bool = True, app_migration_paths: Optional[List[str]] = None) -> bool:
         """
@@ -1190,15 +1283,7 @@ class DatabaseManager:
                     return []
 
             except Exception as e:
-                # Roll back so the connection is clean for the next caller.
-                # A failed statement leaves PostgreSQL in an aborted
-                # transaction state, and without this every later query on
-                # that pooled connection would fail too.
-                try:
-                    conn.rollback()
-                    logger.debug("Rolled back transaction after error")
-                except Exception:
-                    pass  # Ignore rollback errors
+                self._rollback_after_error(conn)
                 logger.error(f"Query execution failed: {e}")
                 raise
 
@@ -1342,10 +1427,7 @@ class DatabaseManager:
                     return dict(row)
             except Exception as e:
                 logger.error(f"fetch_one failed: {e}")
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+                self._rollback_after_error(conn)
                 # Raise rather than returning None: a swallowed error is
                 # indistinguishable from "no row matched"
                 raise

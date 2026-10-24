@@ -227,3 +227,17 @@ __all__ += [
     'QueryStat',
     'QueryTiming',
 ]
+
+# feature/savepoints
+
+from .savepoints import (
+    NESTED_MODES,
+    SavepointSQL,
+    savepoint_sql,
+)
+
+__all__ += [
+    'NESTED_MODES',
+    'SavepointSQL',
+    'savepoint_sql',
+]
