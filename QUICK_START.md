@@ -153,15 +153,17 @@ else:
 ### Insert and Get ID
 
 ```python
-db.execute(
+# return_id=True hands back the key the database generated for the new row.
+# One call on every backend: SQLite lastrowid, PostgreSQL RETURNING,
+# MySQL LAST_INSERT_ID(), MSSQL SCOPE_IDENTITY() are handled for you.
+user_id = db.execute(
     "INSERT INTO users (email, name) VALUES (:email, :name)",
-    {"email": "bob@example.com", "name": "Bob"}
+    {"email": "bob@example.com", "name": "Bob"},
+    return_id=True,
 )
 
-# For SQLite (uses last_insert_rowid)
-user_id = db._connection.cursor().lastrowid
-
-# For others, use RETURNING or SELECT LAST_INSERT_ID()
+# Returns None when nothing was inserted (e.g. INSERT .. ON CONFLICT DO NOTHING).
+# If you write your own RETURNING clause, its first column is returned instead.
 ```
 
 ### Batch Inserts

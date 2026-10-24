@@ -104,6 +104,13 @@ db.execute(
     {"name": "Alice", "email": "alice@example.com", "age": 30}
 )
 
+# INSERT and get the generated key back, on every backend
+bob_id = db.execute(
+    "INSERT INTO users (name, email, age) VALUES (:name, :email, :age)",
+    {"name": "Bob", "email": "bob@example.com", "age": 41},
+    return_id=True
+)
+
 # SELECT one row
 user = db.fetch_one(
     "SELECT * FROM users WHERE email = :email",
@@ -294,6 +301,13 @@ def test_crud_operations(db):
 | **Limit** | `LIMIT n` | `LIMIT n` | `LIMIT n` | `TOP n` |
 | **Date/Time now** | `NOW()` | `CURRENT_TIMESTAMP` | `NOW()` | `GETDATE()` |
 | **Random** | `RANDOM()` | `RANDOM()` | `RAND()` | `NEWID()` |
+| **Generated ID** | `RETURNING id` | `last_insert_rowid()` | `LAST_INSERT_ID()` | `SCOPE_IDENTITY()` |
+
+`execute(..., return_id=True)` hides the last row: it reads SQLite's and
+MySQL's `lastrowid`, appends `RETURNING "<primary key>"` on PostgreSQL (the
+key column is read from the catalog once per table), and runs
+`SCOPE_IDENTITY()` in the same batch as the INSERT on MSSQL. It returns the
+generated key, or None when no row was inserted.
 
 ### Parameter Placeholders
 

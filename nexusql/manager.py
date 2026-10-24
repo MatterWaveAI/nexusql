@@ -35,6 +35,100 @@ logger = logging.getLogger(__name__)
 PARAM_TOKEN = r'(?<!:):(\w+)'
 
 
+# --- generated-ID retrieval ---------------------------------------------------
+#
+# Each driver hands back an auto-generated key differently: SQLite and
+# pymysql expose cursor.lastrowid, PostgreSQL wants a RETURNING clause, and
+# SQL Server wants SCOPE_IDENTITY() read in the same batch as the INSERT.
+# execute(..., return_id=True) hides that behind one call. The helpers below
+# are shared with the async PostgreSQL backend so both paths behave alike.
+
+# Leading INSERT (or REPLACE) and the table it targets. Accepts the SQLite
+# ``INSERT OR REPLACE`` and MySQL ``INSERT IGNORE`` modifiers, and a table
+# name that is bare, schema-qualified, or double-quoted.
+_INSERT_TARGET = re.compile(
+    r'^\s*(?:INSERT|REPLACE)\b'
+    r'(?:\s+(?:OR\s+\w+|IGNORE|LOW_PRIORITY|HIGH_PRIORITY|DELAYED))*'
+    r'\s+INTO\s+'
+    r'((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)',
+    re.IGNORECASE,
+)
+
+# Column(s) of a table's primary key. The table name is resolved through
+# regclass, so an unquoted name case-folds and a schema prefix is honoured,
+# exactly as the INSERT itself resolves it.
+PG_PRIMARY_KEY_SQL = """
+    SELECT a.attname
+    FROM pg_index i
+    JOIN pg_attribute a
+      ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+    WHERE i.indrelid = %(table)s::regclass
+      AND i.indisprimary
+    ORDER BY a.attnum
+"""
+
+
+def is_insert_statement(query: str) -> bool:
+    """True for INSERT and REPLACE; the only statements that generate a key."""
+    return _INSERT_TARGET.match(query) is not None
+
+
+def insert_target_table(query: str) -> str:
+    """
+    The table an INSERT writes to, as written in the query.
+
+    Raises ValueError when the statement is not an INSERT whose target can
+    be read off the leading clause.
+    """
+    match = _INSERT_TARGET.match(query)
+    if match is None:
+        raise ValueError(
+            "return_id=True needs an INSERT statement; could not find "
+            f"'INSERT INTO <table>' at the start of: {query.strip()[:80]!r}"
+        )
+    return match.group(1)
+
+
+def single_primary_key(table: str, columns: List[str]) -> str:
+    """
+    The one primary-key column of ``table``, or a ValueError saying why
+    the generated ID is ambiguous (no key, or a composite one).
+    """
+    if len(columns) == 1:
+        return columns[0]
+    if not columns:
+        detail = "has no primary key"
+    else:
+        detail = f"has a composite primary key ({', '.join(columns)})"
+    raise ValueError(
+        f"return_id=True cannot pick the generated ID: table {table} {detail}. "
+        "Add an explicit RETURNING <column> to the INSERT instead."
+    )
+
+
+def with_returning(query: str, column: str) -> str:
+    """Append ``RETURNING "column"`` to an INSERT, dropping a trailing ';'."""
+    quoted = '"' + column.replace('"', '""') + '"'
+    return f"{strip_trailing_semicolon(query)} RETURNING {quoted}"
+
+
+def strip_trailing_semicolon(query: str) -> str:
+    """The statement without its terminating ';' so a clause can follow it."""
+    return query.rstrip().rstrip(';').rstrip()
+
+
+def first_value(row) -> Any:
+    """
+    The first column of a driver row, whatever shape the driver uses.
+
+    psycopg (dict_row) and pymysql (DictCursor) return dicts; sqlite3.Row,
+    pyodbc.Row and plain tuples index by position.
+    """
+    if isinstance(row, dict):
+        return next(iter(row.values()))
+    return row[0]
+
+
 class DatabaseManager:
     """Database manager for handling database operations"""
 
@@ -75,6 +169,10 @@ class DatabaseManager:
         # its own, which also lets two threads run independent transactions
         # through one manager.
         self._state = threading.local()
+
+        # PostgreSQL primary-key column per table, looked up once for
+        # execute(..., return_id=True) and reused for later inserts.
+        self._pk_cache: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Per-thread connection state
@@ -823,7 +921,8 @@ class DatabaseManager:
         else:
             return query, tuple(params.values()) if params else None
 
-    async def execute_async(self, query: str, params: Optional[Dict] = None) -> Any:
+    async def execute_async(self, query: str, params: Optional[Dict] = None,
+                            return_id: bool = False) -> Any:
         """
         Execute a query without blocking the event loop.
 
@@ -834,11 +933,12 @@ class DatabaseManager:
         Args:
             query: SQL query with named parameters like :param_name
             params: Dict of parameters {"param_name": value}
+            return_id: Return the generated key of an INSERT; see execute()
         """
         import asyncio
         if self.config.database_type == DatabaseType.SQLITE:
-            return self.execute(query, params)
-        return await asyncio.to_thread(self.execute, query, params)
+            return self.execute(query, params, return_id=return_id)
+        return await asyncio.to_thread(self.execute, query, params, return_id)
 
 
     def _execute_raw(self, query: str, params: Optional[Dict] = None,
@@ -874,24 +974,49 @@ class DatabaseManager:
 
         return cursor
 
-    def execute(self, query: str, params: Optional[Dict] = None):
+    def execute(self, query: str, params: Optional[Dict] = None,
+                return_id: bool = False):
         """
         Execute a query with named parameters.
 
         For SELECT queries, returns List[Dict] with results.
         For INSERT/UPDATE/DELETE, returns List[Dict] (empty) for success.
 
+        With ``return_id=True`` the statement must be an INSERT, and the
+        return value is the key the database generated for the new row
+        (an int for SERIAL / AUTOINCREMENT / AUTO_INCREMENT / IDENTITY
+        columns), or None when no row was inserted. The same call works on
+        every backend:
+
+            user_id = db.execute(
+                "INSERT INTO users (name) VALUES (:name)",
+                {"name": "John"},
+                return_id=True,
+            )
+
+        If the INSERT already carries a RETURNING clause (or OUTPUT on
+        SQL Server), the first column of its first row is returned instead.
+        On PostgreSQL the table needs a single-column primary key; otherwise
+        write the RETURNING clause yourself. The value describes one row, so
+        for a multi-row INSERT prefer RETURNING: the drivers disagree on
+        whether the first or the last generated key is reported.
+
         Args:
             query: SQL query with :param_name placeholders
             params: Dict like {"param_name": "value"}
+            return_id: Return the generated key of an INSERT instead of rows
 
         Returns:
-            List[Dict]: Query results (empty list for non-SELECT queries)
+            List[Dict]: Query results (empty list for non-SELECT queries),
+            or the generated key when return_id is True
         """
         self._reject_transaction_statement(query)
 
         with self._borrow() as conn:
             try:
+                if return_id:
+                    return self._execute_return_id(query, params, conn)
+
                 cursor = self._execute_raw(query, params, conn)
 
                 # Check if this is a query that returns results
@@ -953,6 +1078,92 @@ class DatabaseManager:
                     pass  # Ignore rollback errors
                 logger.error(f"Query execution failed: {e}")
                 raise
+
+    def _execute_return_id(self, query: str, params: Optional[Dict], conn) -> Any:
+        """
+        Run an INSERT and return the key generated for the new row.
+
+        Runs inside execute()'s borrow/rollback handling. Commits unless the
+        caller holds a transaction, matching the other write paths.
+        """
+        if not is_insert_statement(query):
+            raise ValueError(
+                "return_id=True only applies to INSERT statements, got: "
+                f"{query.strip()[:80]!r}"
+            )
+
+        db_type = self.config.database_type
+        query_upper = query.upper()
+        has_returning = re.search(r'\bRETURNING\b', query_upper) is not None
+        has_output = (db_type == DatabaseType.MSSQL
+                      and re.search(r'\bOUTPUT\b', query_upper) is not None)
+
+        if has_returning or has_output:
+            # The caller already named the column; honour that.
+            cursor = self._execute_raw(query, params, conn)
+            row = cursor.fetchone()
+            new_id = first_value(row) if row else None
+
+        elif db_type == DatabaseType.POSTGRESQL:
+            # psycopg has no lastrowid, and lastval() would report a stale
+            # sequence value when this table has no sequence at all, so ask
+            # the catalog for the primary key and RETURNING it.
+            column = self._postgres_primary_key(query, conn)
+            cursor = self._execute_raw(with_returning(query, column), params, conn)
+            row = cursor.fetchone()
+            new_id = first_value(row) if row else None
+
+        elif db_type == DatabaseType.MSSQL:
+            # SCOPE_IDENTITY() is scoped to the batch, so it has to travel
+            # with the INSERT; a second execute() would read NULL. The cast
+            # turns pyodbc's Decimal into an int.
+            batch = (strip_trailing_semicolon(query)
+                     + "; SELECT CAST(SCOPE_IDENTITY() AS BIGINT)")
+            cursor = self._execute_raw(batch, params, conn)
+            # The INSERT's own (row-count) result comes first; move past it.
+            while cursor.description is None:
+                if not cursor.nextset():
+                    raise RuntimeError(
+                        "SCOPE_IDENTITY() produced no result set after INSERT")
+            row = cursor.fetchone()
+            new_id = row[0] if row else None
+
+        else:
+            # sqlite3 and pymysql both expose the driver's last insert id.
+            cursor = self._execute_raw(query, params, conn)
+            new_id = cursor.lastrowid
+            # Nothing inserted (INSERT OR IGNORE on a conflict, INSERT ..
+            # SELECT matching no rows) leaves lastrowid stale on SQLite and
+            # 0 on MySQL; 0 is also MySQL's "no AUTO_INCREMENT value".
+            if cursor.rowcount == 0 or not new_id:
+                new_id = None
+
+        # Close before committing: SQLite will not commit while a statement
+        # is still in progress.
+        cursor.close()
+        if not self._in_transaction:
+            conn.commit()
+        return new_id
+
+    def _postgres_primary_key(self, query: str, conn) -> str:
+        """
+        Primary-key column of the table an INSERT targets, from the catalog.
+
+        Cached per table name for the life of the manager, so each table
+        costs one catalog round-trip rather than one per insert.
+        """
+        table = insert_target_table(query)
+        column = self._pk_cache.get(table)
+        if column is None:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(PG_PRIMARY_KEY_SQL, {'table': table})
+                columns = [first_value(row) for row in cursor.fetchall()]
+            finally:
+                cursor.close()
+            column = single_primary_key(table, columns)
+            self._pk_cache[table] = column
+        return column
 
     # Statements that used to be intercepted by execute() to drive
     # transactions. With a pool there is no single connection for them to

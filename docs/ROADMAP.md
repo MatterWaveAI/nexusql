@@ -102,37 +102,34 @@ The following issues have been **fixed and tested**:
 
 ---
 
-## 🔴 **Outstanding Issues (Future Enhancements)**
+### ✅ Issue #4: Auto-increment ID Retrieval - **FIXED**
 
-### Issue #4: Auto-increment ID Retrieval
+**Location**: `DatabaseManager.execute(..., return_id=True)` and `AsyncPostgresBackend.execute(..., return_id=True)`
 
-**Problem**: After INSERT with auto-increment primary key, different databases return the ID differently.
+**Problem**: After INSERT with an auto-increment primary key, every database handed the ID back differently, so callers reached for `db._connection.cursor().lastrowid` (wrong under pooling) or wrote per-backend SQL.
 
-**Database-Specific Behavior**:
+**Solution**: One flag, implemented per backend behind the same call:
 - SQLite: `cursor.lastrowid`
-- PostgreSQL: `RETURNING id` clause or `currval()`
-- MySQL: `LAST_INSERT_ID()`
-- MSSQL: `SCOPE_IDENTITY()` or `OUTPUT` clause
+- PostgreSQL: the table's primary-key column is read from `pg_index` once per table (cached) and `RETURNING "<pk>"` is appended to the INSERT. `lastval()` was rejected: on a pooled connection it reports a stale sequence value when the table has no sequence at all.
+- MySQL: `cursor.lastrowid` (pymysql's `LAST_INSERT_ID()`), with 0 mapped to None
+- MSSQL: `SELECT CAST(SCOPE_IDENTITY() AS BIGINT)` appended to the INSERT batch, since SCOPE_IDENTITY() is NULL in a separate batch
+
+```python
+user_id = db.execute(
+    "INSERT INTO users (name) VALUES (:name)", {'name': 'John'}, return_id=True)
+```
+
+Returns None when no row was inserted. An INSERT that already carries RETURNING (or OUTPUT on MSSQL) returns the first column of its first row. A PostgreSQL table with no, or a composite, primary key raises ValueError pointing at an explicit RETURNING.
+
+**Tests Added**:
+- Unit tests: [tests/unit/test_return_id.py](../tests/unit/test_return_id.py) - SQLite driver path, MySQL/MSSQL/PostgreSQL branches against driver-shaped fakes, helper parsing
+- Integration tests: [tests/integration/test_return_id.py](../tests/integration/test_return_id.py) - parametrised over all four backends, plus PostgreSQL edge cases and the async backend
 
 ---
 
-## 📋 **Remaining Implementation Plan**
+## 🔴 **Outstanding Issues (Future Enhancements)**
 
-### Phase 1: Auto-increment ID Support (Future Enhancement)
-
-**Goal**: Provide consistent API for retrieving auto-generated IDs.
-
-**Proposed API**:
-```python
-result = db.execute(
-    "INSERT INTO users (name) VALUES (:name)",
-    {'name': 'John'},
-    return_id=True  # New parameter
-)
-# result will contain the auto-generated ID
-```
-
-**Implementation**: Requires significant research into database-specific behavior. Defer until user demand justifies the complexity.
+None at present; see the forward-looking features below.
 
 ---
 
@@ -143,7 +140,7 @@ result = db.execute(
 | ~~execute_script() splitting~~ | 🔴 High | ~~4-6h~~ | ✅ **Completed** |
 | ~~Binary/BLOB support~~ | 🟡 Medium | ~~3-4h~~ | ✅ **Completed** |
 | ~~Concurrency docs/tests~~ | 🟢 Low | ~~2-3h~~ | ✅ **Completed** |
-| Auto-increment ID | 🔵 Future | 8-12h | Deferred |
+| ~~Auto-increment ID~~ | 🔵 Future | ~~8-12h~~ | ✅ **Completed** |
 
 **Phase 1 Critical Issues: All Complete! 🎉**
 

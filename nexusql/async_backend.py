@@ -39,7 +39,16 @@ from .interfaces import (
     create_error_result,
     create_query_result,
 )
-from .manager import DatabaseManager, PARAM_TOKEN
+from .manager import (
+    DatabaseManager,
+    PARAM_TOKEN,
+    PG_PRIMARY_KEY_SQL,
+    first_value,
+    insert_target_table,
+    is_insert_statement,
+    single_primary_key,
+    with_returning,
+)
 
 try:
     import psycopg
@@ -136,6 +145,8 @@ class AsyncPostgresBackend(DatabaseInterface):
         self._pool = None
         self._pinned_conn = None
         self._depth = 0
+        # Primary-key column per table, for execute(..., return_id=True).
+        self._pk_cache: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -238,23 +249,41 @@ class AsyncPostgresBackend(DatabaseInterface):
             await pool.putconn(conn)
 
     def _prepare(self, query: str, params: Optional[Dict[str, Any]]):
-        """Translate to the PostgreSQL dialect; params pass through as a dict."""
+        """
+        Translate to the PostgreSQL dialect and rewrite ``:name`` parameters
+        to psycopg's ``%(name)s``; the params dict passes through unchanged.
+
+        Delegates to the sync manager's converter so both paths read ``:name``
+        and ``::cast`` identically.
+        """
         translated = _translate_sql_for_postgres(query)
-        return translated, params or None
+        return DatabaseManager._convert_params(_PG_STUB, translated, params)
 
     # ------------------------------------------------------------------
     # Query execution
     # ------------------------------------------------------------------
 
     async def execute(
-        self, query: str, params: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+        return_id: bool = False,
+    ) -> Any:
         """
         Execute a query, returning rows for statements that produce them.
 
         Writes outside an explicit transaction commit as soon as they
         succeed, matching the sync manager.
+
+        With ``return_id=True`` the statement must be an INSERT and the
+        generated primary-key value of the new row is returned (None when
+        no row was inserted), as ``DatabaseManager.execute`` does. An INSERT
+        that already has a RETURNING clause yields its first column; otherwise
+        the table's single-column primary key is looked up and returned.
         """
+        if return_id:
+            return await self._execute_return_id(query, params)
+
         sql, args = self._prepare(query, params)
 
         async with self._borrow() as conn:
@@ -268,10 +297,51 @@ class AsyncPostgresBackend(DatabaseInterface):
             return [dict(r) for r in rows]
 
     async def execute_async(
-        self, query: str, params: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+        return_id: bool = False,
+    ) -> Any:
         """Alias for ``execute``; this backend is async throughout."""
-        return await self.execute(query, params)
+        return await self.execute(query, params, return_id=return_id)
+
+    async def _execute_return_id(
+        self, query: str, params: Optional[Dict[str, Any]]
+    ) -> Any:
+        """Run an INSERT and return the key generated for the new row."""
+        if not is_insert_statement(query):
+            raise ValueError(
+                "return_id=True only applies to INSERT statements, got: "
+                f"{query.strip()[:80]!r}"
+            )
+
+        if re.search(r'\bRETURNING\b', query, re.IGNORECASE) is None:
+            table = insert_target_table(query)
+            async with self._borrow() as conn:
+                column = await self._primary_key(table, conn)
+            query = with_returning(query, column)
+
+        sql, args = self._prepare(query, params)
+        async with self._borrow() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, args)
+                row = await cur.fetchone()
+
+            if self._pinned_conn is None:
+                await conn.commit()
+
+            return first_value(row) if row else None
+
+    async def _primary_key(self, table: str, conn) -> str:
+        """Single primary-key column of ``table``, cached per table name."""
+        column = self._pk_cache.get(table)
+        if column is None:
+            async with conn.cursor() as cur:
+                await cur.execute(PG_PRIMARY_KEY_SQL, {"table": table})
+                rows = await cur.fetchall()
+            column = single_primary_key(table, [first_value(r) for r in rows])
+            self._pk_cache[table] = column
+        return column
 
     async def fetch_one(
         self, query: str, params: Optional[Dict[str, Any]] = None

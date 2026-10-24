@@ -306,6 +306,12 @@ created = await db.execute(
     "INSERT INTO users (email) VALUES (:email) RETURNING id",
     {"email": "a@b.c"})
 
+# Or let return_id=True find the primary key and return just its value,
+# the same call the sync manager offers on every backend.
+user_id = await db.execute(
+    "INSERT INTO users (email) VALUES (:email)", {"email": "b@c.d"},
+    return_id=True)
+
 # Explicit transaction (commits on clean exit, rolls back on error)
 async with db.transaction():
     await db.execute("INSERT INTO users (email) VALUES (:email)",
@@ -417,7 +423,22 @@ Disconnect from the database.
 #### `async initialize(apply_schema=True, app_migration_paths=None) -> bool`
 Initialize database and optionally apply migrations.
 
-#### `execute(query, params=None) -> List[Dict]`
+#### `execute(query, params=None, return_id=False) -> List[Dict] | Any`
+Runs a statement and returns its rows (an empty list for writes). With
+`return_id=True` the statement must be an INSERT and the generated key of
+the new row is returned instead (None when no row was inserted). The
+driver-specific part is handled per backend: SQLite `lastrowid`, PostgreSQL
+`RETURNING <primary key>` (looked up in the catalog once per table), MySQL
+`LAST_INSERT_ID()`, MSSQL `SCOPE_IDENTITY()` in the same batch. An INSERT
+that already has a RETURNING (or MSSQL OUTPUT) clause returns the first
+column of its first row. On PostgreSQL the table needs a single-column
+primary key; otherwise write the RETURNING clause yourself.
+
+```python
+user_id = db.execute(
+    "INSERT INTO users (email) VALUES (:email)", {"email": "a@b.c"},
+    return_id=True)
+```
 Execute query with named parameters. Returns list of dicts for SELECT, empty list for INSERT/UPDATE/DELETE.
 
 #### `fetch_one(query, params=None) -> Optional[Dict]`

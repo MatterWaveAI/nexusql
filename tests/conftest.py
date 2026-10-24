@@ -1,7 +1,17 @@
 """Pytest configuration for NexusQL tests"""
+import asyncio
+import sys
+
 import pytest
 import os
 from pathlib import Path
+
+# psycopg's async connection needs a selector-based loop; on Windows the
+# default is the proactor loop, under which every async PostgreSQL test
+# fails to connect and skips as "unreachable". Pick the selector loop here
+# so the async tests run on a Windows dev box the same as they do in CI.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @pytest.fixture
