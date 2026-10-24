@@ -1513,6 +1513,19 @@ class DatabaseManager:
         """
         from .backup import import_tables
         return import_tables(self, path, truncate=truncate, tables=tables)
+    @property
+    def cdc(self):
+        """
+        Trigger-based change data capture for this database.
+
+        Created on first use, so managers that never capture changes pay
+        nothing for it; see ``nexusql.cdc`` for the operations.
+        """
+        cdc = getattr(self, '_cdc', None)
+        if cdc is None:
+            from .cdc import ChangeDataCapture
+            cdc = self._cdc = ChangeDataCapture(self)
+        return cdc
 
     def __enter__(self):
         """Context manager entry"""

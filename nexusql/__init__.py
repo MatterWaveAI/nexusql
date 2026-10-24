@@ -93,3 +93,15 @@ __all__ += [
     'BackupError',
     'BackupToolNotFound',
 ]
+
+# feature/change-data-capture
+
+from .cdc import (
+    ChangeDataCapture,
+    AsyncChangeDataCapture,
+)
+
+__all__ += [
+    'ChangeDataCapture',
+    'AsyncChangeDataCapture',
+]

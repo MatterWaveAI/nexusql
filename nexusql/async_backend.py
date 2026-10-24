@@ -483,6 +483,15 @@ class AsyncPostgresBackend(DatabaseInterface):
             self._depth = 0
             await pool.putconn(conn)
 
+    @property
+    def cdc(self):
+        """Trigger-based change data capture; see ``nexusql.cdc``."""
+        cdc = getattr(self, '_cdc', None)
+        if cdc is None:
+            from .cdc import AsyncChangeDataCapture
+            cdc = self._cdc = AsyncChangeDataCapture(self)
+        return cdc
+
     async def health_check(self) -> bool:
         """True if a trivial query succeeds."""
         try:

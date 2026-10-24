@@ -170,7 +170,7 @@ The following features are **not yet implemented** but may be needed for future 
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
 | ~~Sharding/Partitioning~~ | Done: `ShardedDatabaseManager` with key, hash and range routers, single-shard transactions, fan-out reads; see [SHARDING.md](SHARDING.md) | — | Done |
-| **Change Data Capture** | Track all changes for audit/event sourcing | 16-20h | Low |
+| ~~Change Data Capture~~ | Done: trigger-based `db.cdc`, see [CHANGE_DATA_CAPTURE.md](CHANGE_DATA_CAPTURE.md) | — | Done |
 | **Encryption/Compliance** | Column-level encryption, PII masking, GDPR | 12-16h | Low |
 | **Query Builder/ORM** | Type-safe query builder for better DX | 16-24h | Low |
 | ~~Test Fixtures~~ | Done: `nexusql.testing` factories, snapshots, `truncate` and the pytest plugin, see [TESTING.md](TESTING.md) | — | Done |
@@ -206,7 +206,7 @@ The following features are **not yet implemented** but may be needed for future 
 
 ### Phase 4: Scale & Enterprise (80-120 hours)
 12. ✅ Database sharding framework - **DONE** ([SHARDING.md](SHARDING.md))
-13. Change data capture
+13. ✅ Change data capture - **DONE** (trigger-based `db.cdc`)
 14. Encryption/compliance
 15. Query builder API
 16. ✅ Test data factories - **DONE** ([TESTING.md](TESTING.md))
