@@ -1,61 +1,64 @@
 name: Publish to PyPI
 
+# Publishing a GitHub release is the only trigger: pushing a tag alone publishes
+# nothing, so a stray tag cannot release, and a release cannot publish twice.
 on:
-  push:
-    tags:
-      - 'v*'
   release:
     types: [published]
-  workflow_dispatch:
+
+concurrency:
+  group: publish-nexusql-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Release tag must match the package version
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install build twine
+          pip install -e ".[dev]" build twine
 
-      - name: Build package
-        run: python -m build
+      - name: Unit tests
+        run: pytest tests/unit -q
 
-      - name: Check package
-        run: twine check dist/*
-
-      # Publish to the Gitea registry on every tag, before the PyPI step. This is the
-      # dev index the other packages already use, and it is what makes a build
-      # installable without a public release. PyPI stays gated on a token being set.
-      - name: Publish to the Gitea package registry
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        env:
-          # The built-in token does not carry package:write on this Gitea, so
-          # publishing needs one created for the purpose.
-          TWINE_USERNAME: ${{ secrets.PKG_REGISTRY_USER }}
-          TWINE_PASSWORD: ${{ secrets.PKG_REGISTRY_PASSWORD }}
-          TWINE_REPOSITORY_URL: http://localhost:3000/api/packages/MatterWaveAI-dev/pypi
+      - name: Build and check
         run: |
-          if [ -n "$TWINE_PASSWORD" ]; then
-            python -m twine upload --non-interactive --verbose dist/*
-          else
-            echo "::warning::PKG_REGISTRY_PASSWORD not set; skipping the Gitea publish"
-          fi
+          python -m build
+          twine check dist/*
 
-      - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "$TWINE_PASSWORD" ]; then
-            twine upload dist/* -u "$TWINE_USERNAME" -p "$TWINE_PASSWORD"
-          else
-            echo "PYPI_API_TOKEN not set, skipping publish"
-          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI trusts this repo + workflow + environment over OIDC,
+    # so no API token is stored. Configure it on the project's PyPI page under
+    # Publishing, with environment "pypi".
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
