@@ -14,6 +14,16 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .crypto import (
+    CRYPTOGRAPHY_AVAILABLE,
+    DecryptionError,
+    FieldEncryptor,
+    KeyRing,
+    blind_index,
+    erase,
+    mask,
+    token_key_id,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +49,14 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'CRYPTOGRAPHY_AVAILABLE',
+    'DecryptionError',
+    'FieldEncryptor',
+    'KeyRing',
+    'blind_index',
+    'erase',
+    'mask',
+    'token_key_id',
 ]
 
 if PSYCOPG_AVAILABLE:
