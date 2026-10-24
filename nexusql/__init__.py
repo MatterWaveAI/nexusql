@@ -215,3 +215,15 @@ __all__ += [
     'mask',
     'token_key_id',
 ]
+
+# feature/query-performance
+
+from .performance import (
+    QueryStat,
+    QueryTiming,
+)
+
+__all__ += [
+    'QueryStat',
+    'QueryTiming',
+]
