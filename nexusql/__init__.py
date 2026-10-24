@@ -173,3 +173,21 @@ __all__ += [
     'Update',
     'Delete',
 ]
+
+# feature/row-level-security
+
+from .tenancy import (
+    PG_TENANT_SETTING,
+    TENANT_POLICY_NAME,
+    disable_row_security_statements,
+    row_security_statements,
+    scoped_name,
+)
+
+__all__ += [
+    'PG_TENANT_SETTING',
+    'TENANT_POLICY_NAME',
+    'disable_row_security_statements',
+    'row_security_statements',
+    'scoped_name',
+]

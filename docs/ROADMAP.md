@@ -161,7 +161,7 @@ The following features are **not yet implemented** but may be needed for future 
 ### 🟡 Medium Priority (Advanced Features)
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
-| **Row-Level Security** | Multi-tenancy support with automatic filtering | 8-12h | Medium |
+| ~~Row-Level Security~~ | Done: `tenant()` / `enable_row_security()` / `scoped()`; PostgreSQL policies, scoped views elsewhere, see [ROW_LEVEL_SECURITY.md](ROW_LEVEL_SECURITY.md) | — | Done |
 | ~~Migration Rollback~~ | Done: `MigrationRunner.rollback()`, `rollback_to()`, `plan_rollback()`, see [MIGRATIONS.md](MIGRATIONS.md) | — | Done |
 | ~~Backup/Recovery~~ | Done: native `backup()`/`restore()` on every backend plus portable `export_tables()`/`import_tables()`, see [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md). Point-in-time recovery is server-side and out of scope | — | Done |
 | ~~Full-Text Search~~ | Done: `db.fts` create_index / drop_index / search / suggest on all four backends, see [FULL_TEXT_SEARCH.md](FULL_TEXT_SEARCH.md) | — | Done |
@@ -199,7 +199,7 @@ The following features are **not yet implemented** but may be needed for future 
 7. Slow query logging
 
 ### Phase 3: Advanced Features (36-50 hours)
-8. Row-level security helpers
+8. ✅ Row-level security helpers - **DONE** ([ROW_LEVEL_SECURITY.md](ROW_LEVEL_SECURITY.md))
 9. ✅ Migration rollback support - **DONE**
 10. ✅ Backup/restore utilities - **DONE** ([BACKUP_RECOVERY.md](BACKUP_RECOVERY.md))
 11. ✅ Full-text search support - **DONE** (`db.fts`, see [FULL_TEXT_SEARCH.md](FULL_TEXT_SEARCH.md))
