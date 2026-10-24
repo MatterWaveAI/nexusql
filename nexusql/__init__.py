@@ -14,6 +14,7 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .cdc import ChangeDataCapture, AsyncChangeDataCapture
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +40,8 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'ChangeDataCapture',
+    'AsyncChangeDataCapture',
 ]
 
 if PSYCOPG_AVAILABLE:

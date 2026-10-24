@@ -336,6 +336,39 @@ failure.
 The package still imports (sync-only) when the extra is not installed;
 `nexusql.PSYCOPG_AVAILABLE` tells you which world you are in.
 
+## Change Data Capture
+
+`db.cdc` installs AFTER INSERT / UPDATE / DELETE triggers on a table that
+record every changed row in `<table>__changes`: the operation, the primary
+key as text, and the old and new rows as JSON. It works on all four backends
+with nothing but DDL rights; the trigger DDL is written per dialect rather
+than translated.
+
+```python
+db.cdc.enable("orders")                       # pk defaults to "id"
+
+db.execute("UPDATE orders SET status = :s WHERE id = :id",
+           {"s": "shipped", "id": 42})
+
+for change in db.cdc.changes("orders", since_id=0, limit=500):
+    change["op"]        # 'I', 'U' or 'D'
+    change["pk"]        # '42'
+    change["old_row"]   # dict, or None for an insert
+    change["new_row"]   # dict, or None for a delete
+
+db.cdc.purge("orders", before_id=change["change_id"])
+db.cdc.disable("orders")   # stop capturing, keep the history
+db.cdc.drop("orders")      # remove the triggers and the history
+```
+
+`enable` is idempotent and is also how a schema change is picked up: the
+triggers embed the column list, so run it again after an `ALTER TABLE`.
+Triggers run synchronously inside each write, so they add latency to the
+captured table; log-based capture (logical replication, binlog) is out of
+scope. `AsyncPostgresBackend.cdc` offers the same calls as coroutines. See
+[docs/CHANGE_DATA_CAPTURE.md](docs/CHANGE_DATA_CAPTURE.md) for the per-backend
+DDL and the trade-offs.
+
 ## Checking Table Existence
 
 ```python
