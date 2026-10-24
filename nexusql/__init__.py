@@ -143,3 +143,33 @@ __all__ += [
     'TableSpec',
     'ValidationReport',
 ]
+
+# feature/query-builder
+
+from .query import (
+    Q,
+    QueryError,
+    Expr,
+    Col,
+    Param,
+    Raw,
+    Statement,
+    Select,
+    Insert,
+    Update,
+    Delete,
+)
+
+__all__ += [
+    'Q',
+    'QueryError',
+    'Expr',
+    'Col',
+    'Param',
+    'Raw',
+    'Statement',
+    'Select',
+    'Insert',
+    'Update',
+    'Delete',
+]
