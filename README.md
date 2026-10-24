@@ -336,6 +336,49 @@ failure.
 The package still imports (sync-only) when the extra is not installed;
 `nexusql.PSYCOPG_AVAILABLE` tells you which world you are in.
 
+## Sharding
+
+`ShardedDatabaseManager` fronts several databases with the same calls as
+`DatabaseManager`, so code written against one database can be pointed at
+many. A router reads the shard key out of each statement's params:
+
+```python
+from nexusql import ShardedDatabaseManager, KeyRouter, HashRouter, RangeRouter
+
+db = ShardedDatabaseManager(
+    {"eu": "postgresql://.../eu", "us": "postgresql://.../us", "ap": "sqlite:///ap.db"},
+    router=KeyRouter("region", {"eu": "eu", "us": "us", "ap": "ap"}),
+)
+# Alternatives: HashRouter("user_id", ["eu", "us", "ap"]) for a stable
+# hash, RangeRouter("user_id", [(1000, "eu"), (2000, "us"), (None, "ap")])
+# for key bands, or any callable (params) -> shard name.
+
+with db:
+    db.execute("CREATE TABLE IF NOT EXISTS users (...)", all_shards=True)
+
+    # Routed by the shard key
+    db.execute("INSERT INTO users (region, name) VALUES (:region, :name)",
+               {"region": "eu", "name": "Ada"})
+
+    # Unrouted read: fans out to every shard, rows concatenated in shard
+    # order, then ordered and capped client-side
+    rows = db.execute("SELECT region, name FROM users",
+                      order_by=[("name", "asc")], limit=20)
+
+    # Transactions span one shard, chosen by the first statement or shard=
+    with db.transaction():
+        db.execute("UPDATE users SET name = :n WHERE region = :region AND id = :id",
+                   {"n": "Ada L.", "region": "eu", "id": 1})
+```
+
+`shard=` on any call overrides the router. A write that cannot be routed
+raises rather than fanning out; `all_shards=True` opts it in. A `LIMIT` in
+fanned-out SQL applies per shard, so use `limit=` for a global cap. There
+are no cross-shard transactions and no distributed joins. `connect()`
+returns `False`, with every shard disconnected again, if any shard fails.
+See [docs/SHARDING.md](docs/SHARDING.md) for the routing order and the
+consistency model.
+
 ## Checking Table Existence
 
 ```python

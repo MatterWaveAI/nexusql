@@ -14,6 +14,13 @@ from .interfaces import (
 )
 
 from .migrations import MigrationRunner, MigrationChecksumMismatch
+from .sharding import (
+    HashRouter,
+    KeyRouter,
+    RangeRouter,
+    ShardedDatabaseManager,
+    ShardingError,
+)
 
 try:
     from .async_backend import PSYCOPG_AVAILABLE
@@ -39,6 +46,11 @@ __all__ = [
     'create_error_result',
     'MigrationRunner',
     'MigrationChecksumMismatch',
+    'ShardedDatabaseManager',
+    'KeyRouter',
+    'HashRouter',
+    'RangeRouter',
+    'ShardingError',
 ]
 
 if PSYCOPG_AVAILABLE:
