@@ -14,8 +14,8 @@ Covered:
 - health_check: True when up, False when unreachable
 - failed query then reuse: a failing statement must not poison the pooled
   connection (the async mirror of the B-002 rollback guarantee)
-- explicit transactions: transaction() context and the sync-style
-  BEGIN/COMMIT/ROLLBACK statement protocol
+- explicit transactions: transaction() context; sync-style BEGIN/COMMIT
+  strings sent through execute() are rejected
 - INSERT .. RETURNING through fetch_one commits and returns the row
   (async mirror of B-002)
 - concurrent migration runners: two runners racing under pg_advisory_lock
@@ -91,16 +91,15 @@ def _table(suffix: str) -> str:
 async def test_pool_round_trip(backend):
     table = _table("roundtrip")
     try:
-        created = await backend.execute(
+        await backend.execute(
             f"CREATE TABLE {table} (id SERIAL PRIMARY KEY, label TEXT)")
-        assert created.success
 
         for i in range(3):
-            r = await backend.execute(
+            # execute returns the rows a statement produces: none for INSERT
+            assert await backend.execute(
                 f"INSERT INTO {table} (label) VALUES (:label)",
                 {"label": f"row{i}"},
-            )
-            assert r.success
+            ) == []
 
         fetched = await backend.fetch_all(
             f"SELECT id, label FROM {table} ORDER BY id")
@@ -136,23 +135,22 @@ async def test_durability_across_pool_reconnect():
     assert await b.connect()
     killer = await psycopg.AsyncConnection.connect(TEST_URL)
     try:
-        assert (await b.execute(
-            f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, v TEXT)")).success
-        assert (await b.execute(
-            f"INSERT INTO {table} VALUES (1, 'before')")).success
+        await b.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, v TEXT)")
+        await b.execute(f"INSERT INTO {table} VALUES (1, 'before')")
 
         # Kill every pooled connection mid-use (T-022 Done: killing the
         # Postgres connection mid-use recovers without a restart).
-        killed = await killer.fetch(
+        cur = await killer.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            "WHERE application_name = $1 AND pid <> pg_backend_pid()",
-            APP_NAME,
+            "WHERE application_name = %s AND pid <> pg_backend_pid()",
+            (APP_NAME,),
         )
+        killed = await cur.fetchall()
         assert len(killed) >= 1, "expected to kill at least one pooled conn"
 
-        # The next statement must transparently recover on a fresh pool...
-        assert (await b.execute(
-            f"INSERT INTO {table} VALUES (2, 'after')")).success
+        # The next statement must transparently recover: the pool checks a
+        # connection on checkout and replaces a dead one.
+        await b.execute(f"INSERT INTO {table} VALUES (2, 'after')")
 
         # ...and BOTH writes (one before, one after the kill) are durable.
         rows = await b.fetch_all(
@@ -180,7 +178,9 @@ async def test_health_check_false_when_database_down():
         )
     # Nothing listens here: health must be False, connect must not raise.
     dead = AsyncPostgresBackend(
-        "postgresql://postgres:mwtest@127.0.0.1:15499/mwtest")
+        "postgresql://postgres:mwtest@127.0.0.1:15499/mwtest",
+        connect_timeout=2,
+    )
     assert await dead.connect() is False
     assert await dead.health_check() is False
 
@@ -222,10 +222,8 @@ async def test_failed_query_then_reuse_same_connection():
 
         # Writes keep working after the failure too (write on the recycled
         # connection, then read it back).
-        assert (await b.execute(
-            f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")).success
-        assert (await b.execute(
-            f"INSERT INTO {table} VALUES (1)")).success
+        await b.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+        await b.execute(f"INSERT INTO {table} VALUES (1)")
         r = await b.fetch_one(f"SELECT id FROM {table}")
         assert r.success and r.data == [{"id": 1}]
     finally:
@@ -296,29 +294,16 @@ async def test_explicit_transaction_context_commits_and_rolls_back(backend):
 @pytest.mark.integration
 @pytest.mark.postgresql
 @pytest.mark.asyncio
-async def test_begin_commit_statement_protocol(backend):
-    """Sync-style BEGIN/COMMIT/ROLLBACK strings pin one pooled connection,
-    mirroring DatabaseManager._in_transaction; the caller owns the commit."""
-    table = _table("txproto")
-    try:
-        await backend.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
-
-        await backend.execute("BEGIN")
-        await backend.execute(f"INSERT INTO {table} VALUES (1)")
-        mid = await backend.fetch_one(
-            f"SELECT id FROM {table} WHERE id = 1")
-        assert mid.success and mid.data == [{"id": 1}]
-        await backend.execute("COMMIT")
-
-        await backend.execute("BEGIN")
-        await backend.execute(f"INSERT INTO {table} VALUES (2)")
-        await backend.execute("ROLLBACK")
-
-        rows = await backend.fetch_all(
-            f"SELECT id FROM {table} ORDER BY id")
-        assert [r["id"] for r in rows.data] == [1]
-    finally:
-        await backend.execute(f"DROP TABLE IF EXISTS {table}")
+async def test_transaction_statements_are_rejected(backend):
+    """execute("BEGIN") was the sync manager's pre-pool transaction protocol.
+    On a pool it would run on whichever connection it borrowed and be
+    committed as that statement returned, so both paths reject it and point
+    at transaction()."""
+    for statement in ("BEGIN", "begin transaction", "COMMIT", "ROLLBACK;"):
+        with pytest.raises(RuntimeError, match="transaction"):
+            await backend.execute(statement)
+    # The pool is untouched: the next statement runs normally.
+    assert await backend.execute("SELECT 1 AS one") == [{"one": 1}]
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ from .manager import (
     first_value,
     insert_target_table,
     is_insert_statement,
+    reject_transaction_statement,
     single_primary_key,
     with_returning,
 )
@@ -129,7 +130,17 @@ class AsyncPostgresBackend(DatabaseInterface):
         min_pool_size: int = 1,
         max_pool_size: int = 10,
         timeout: float = 30.0,
+        connect_timeout: float = 10.0,
     ):
+        """
+        Args:
+            connection_string: PostgreSQL URL
+            min_pool_size: Connections opened eagerly by connect()
+            max_pool_size: Ceiling on concurrent connections
+            timeout: Seconds to wait for a free connection before raising
+            connect_timeout: Seconds connect() waits for the pool to open
+                before reporting the server unreachable
+        """
         if not connection_string.lstrip().lower().startswith(
             ("postgresql://", "postgres://")
         ):
@@ -142,6 +153,7 @@ class AsyncPostgresBackend(DatabaseInterface):
         self._min_pool_size = min_pool_size
         self._max_pool_size = max_pool_size
         self._timeout = timeout
+        self._connect_timeout = connect_timeout
         self._pool = None
         self._pinned_conn = None
         self._depth = 0
@@ -160,12 +172,19 @@ class AsyncPostgresBackend(DatabaseInterface):
             )
 
     async def connect(self) -> bool:
-        """Create the connection pool. Safe to call repeatedly."""
+        """
+        Create the connection pool. Safe to call repeatedly.
+
+        Returns False, rather than raising, when the server cannot be
+        reached within ``connect_timeout`` seconds: the same contract as
+        ``DatabaseManager.connect``, so an unreachable database is reported
+        here and not on the first query.
+        """
         self._require_driver()
         if self._pool is not None:
             return True
 
-        self._pool = AsyncConnectionPool(
+        pool = AsyncConnectionPool(
             self.connection_string,
             min_size=self._min_pool_size,
             max_size=self._max_pool_size,
@@ -174,7 +193,17 @@ class AsyncPostgresBackend(DatabaseInterface):
             check=AsyncConnectionPool.check_connection,
             open=False,
         )
-        await self._pool.open(wait=True, timeout=self._timeout)
+        try:
+            await pool.open(wait=True, timeout=self._connect_timeout)
+        except Exception as exc:
+            logger.error(f"Failed to connect to database: {exc}")
+            try:
+                await pool.close()
+            except Exception:
+                pass
+            return False
+
+        self._pool = pool
         self.is_connected = True
         logger.info("AsyncPostgresBackend pool created")
         return True
@@ -201,7 +230,10 @@ class AsyncPostgresBackend(DatabaseInterface):
         return self._pool
 
     async def __aenter__(self) -> "AsyncPostgresBackend":
-        await self.connect()
+        if not await self.connect():
+            # connect() logged the cause; a context manager cannot hand
+            # back a backend with no pool.
+            raise ConnectionError("AsyncPostgresBackend could not connect")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -281,6 +313,8 @@ class AsyncPostgresBackend(DatabaseInterface):
         that already has a RETURNING clause yields its first column; otherwise
         the table's single-column primary key is looked up and returned.
         """
+        reject_transaction_statement(query)
+
         if return_id:
             return await self._execute_return_id(query, params)
 

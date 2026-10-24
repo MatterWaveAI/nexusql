@@ -129,6 +129,28 @@ def first_value(row) -> Any:
     return row[0]
 
 
+# Statements that used to be intercepted by execute() to drive transactions.
+# With a pool there is no single connection for them to act on, so both the
+# sync manager and the async backend reject them rather than silently send
+# them to the driver, where they would open a transaction nobody tracks.
+TRANSACTION_STATEMENTS = {
+    'BEGIN', 'BEGIN TRANSACTION', 'START TRANSACTION',
+    'COMMIT', 'COMMIT TRANSACTION',
+    'ROLLBACK', 'ROLLBACK TRANSACTION',
+}
+
+
+def reject_transaction_statement(query: str) -> None:
+    """Raise if the caller used the removed execute("BEGIN") protocol."""
+    normalized = query.strip().upper().rstrip(';').strip()
+    normalized = ' '.join(normalized.split())
+    if normalized in TRANSACTION_STATEMENTS:
+        raise RuntimeError(
+            f"execute({query.strip()!r}) is no longer supported. "
+            f"Use `with db.transaction():` instead."
+        )
+
+
 class DatabaseManager:
     """Database manager for handling database operations"""
 
@@ -1165,25 +1187,11 @@ class DatabaseManager:
             self._pk_cache[table] = column
         return column
 
-    # Statements that used to be intercepted by execute() to drive
-    # transactions. With a pool there is no single connection for them to
-    # act on, so they are rejected rather than silently sent to the driver,
-    # where they would open a transaction the manager does not track.
-    _TRANSACTION_STATEMENTS = {
-        'BEGIN', 'BEGIN TRANSACTION', 'START TRANSACTION',
-        'COMMIT', 'COMMIT TRANSACTION',
-        'ROLLBACK', 'ROLLBACK TRANSACTION',
-    }
+    _TRANSACTION_STATEMENTS = TRANSACTION_STATEMENTS
 
     def _reject_transaction_statement(self, query: str) -> None:
         """Raise if the caller used the removed execute("BEGIN") protocol."""
-        normalized = query.strip().upper().rstrip(';').strip()
-        normalized = ' '.join(normalized.split())
-        if normalized in self._TRANSACTION_STATEMENTS:
-            raise RuntimeError(
-                f"execute({query.strip()!r}) is no longer supported. "
-                f"Use `with db.transaction():` instead."
-            )
+        reject_transaction_statement(query)
 
     def _is_write_statement(self, query: str) -> bool:
         """Check whether a query is a write (DML) statement"""

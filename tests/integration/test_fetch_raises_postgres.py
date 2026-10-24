@@ -8,9 +8,9 @@ Cases:
   error must surface
 - connection killed mid-fetch (pg_terminate_backend from a second session):
   the error must surface, and the server must still serve fresh connections
-- async: pool recreated and usable again after a mid-fetch kill (reconnect
-  preserved), and when the retry itself is killed too, the exception still
-  surfaces (never an empty result)
+- async: the pool replaces the killed connection so the next query works,
+  and a connection killed repeatedly still surfaces the exception (never an
+  empty result)
 
 The sync tests use the suite-wide postgresql_url/skip_if_no_postgresql
 fixtures (TEST_POSTGRESQL_URL); the async tests target the T-022 container
@@ -172,9 +172,7 @@ async def test_async_fetch_all_killed_mid_fetch_raises():
             f"Postgres 16 test container to run the B-003 integration tests."
         )
     marker = f"b003_kill_{uuid.uuid4().hex[:8]}"
-    b = AsyncPostgresBackend(
-        TEST_URL, min_pool_size=1, max_pool_size=1, max_reconnect_attempts=0
-    )
+    b = AsyncPostgresBackend(TEST_URL, min_pool_size=1, max_pool_size=1)
     assert await b.connect()
 
     async def kill_later():
@@ -183,8 +181,8 @@ async def test_async_fetch_all_killed_mid_fetch_raises():
         try:
             await admin.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE query LIKE $1 AND pid <> pg_backend_pid()",
-                f"%{marker}%",
+                "WHERE query LIKE %s AND pid <> pg_backend_pid()",
+                (f"%{marker}%",),
             )
         finally:
             await admin.close()
@@ -205,17 +203,15 @@ async def test_async_fetch_all_killed_mid_fetch_raises():
 @pytest.mark.postgresql
 @pytest.mark.asyncio
 async def test_async_kill_after_reconnect_still_raises():
-    """The reconnect may be attempted, but if the retry also fails the
-    exception must surface - never an empty/None result."""
+    """The pool opens no replacement mid-query, so a connection killed
+    again and again must surface the exception - never an empty/None result."""
     if not await _server_reachable(TEST_URL):
         pytest.skip(
             f"SKIPPED - PostgreSQL unreachable at {TEST_URL}; start the "
             f"Postgres 16 test container to run the B-003 integration tests."
         )
     marker = f"b003_kill_{uuid.uuid4().hex[:8]}"
-    b = AsyncPostgresBackend(
-        TEST_URL, min_pool_size=1, max_pool_size=1, max_reconnect_attempts=1
-    )
+    b = AsyncPostgresBackend(TEST_URL, min_pool_size=1, max_pool_size=1)
     assert await b.connect()
 
     async def keep_killing():
@@ -225,8 +221,8 @@ async def test_async_kill_after_reconnect_still_raises():
                 await asyncio.sleep(0.5)
                 await admin.execute(
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE query LIKE $1 AND pid <> pg_backend_pid()",
-                    f"%{marker}%",
+                    "WHERE query LIKE %s AND pid <> pg_backend_pid()",
+                    (f"%{marker}%",),
                 )
         finally:
             await admin.close()

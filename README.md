@@ -291,6 +291,8 @@ db = AsyncPostgresBackend(
     min_pool_size=1,
     max_pool_size=10,
 )
+# False, not an exception, when the server is unreachable (after
+# connect_timeout seconds, default 10), matching DatabaseManager.connect().
 await db.connect()
 
 # Named parameters work exactly like the sync manager: :name becomes
@@ -317,9 +319,9 @@ async with db.transaction():
     await db.execute("INSERT INTO users (email) VALUES (:email)",
                      {"email": "x@y.z"})
 
-# Use transaction() rather than execute("BEGIN"): a BEGIN sent through
-# execute runs on whichever pooled connection it borrows and is committed
-# when that statement returns, so it does not span the statements after it.
+# execute("BEGIN") raises RuntimeError, as on the sync manager: a BEGIN sent
+# through execute would run on whichever pooled connection it borrowed and be
+# committed as that statement returned. transaction() is the supported way.
 
 print(await db.health_check())
 await db.disconnect()
