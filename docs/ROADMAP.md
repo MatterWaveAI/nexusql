@@ -164,7 +164,7 @@ The following features are **not yet implemented** but may be needed for future 
 | **Row-Level Security** | Multi-tenancy support with automatic filtering | 8-12h | Medium |
 | ~~Migration Rollback~~ | Done: `MigrationRunner.rollback()`, `rollback_to()`, `plan_rollback()`, see [MIGRATIONS.md](MIGRATIONS.md) | — | Done |
 | ~~Backup/Recovery~~ | Done: native `backup()`/`restore()` on every backend plus portable `export_tables()`/`import_tables()`, see [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md). Point-in-time recovery is server-side and out of scope | — | Done |
-| **Full-Text Search** | Full-text indexes, search ranking, fuzzy matching | 12-16h | Medium |
+| ~~Full-Text Search~~ | Done: `db.fts` create_index / drop_index / search / suggest on all four backends, see [FULL_TEXT_SEARCH.md](FULL_TEXT_SEARCH.md) | — | Done |
 
 ### 🟢 Low Priority (Scale & Advanced)
 | Feature | Description | Effort | Priority |
@@ -202,7 +202,7 @@ The following features are **not yet implemented** but may be needed for future 
 8. Row-level security helpers
 9. ✅ Migration rollback support - **DONE**
 10. ✅ Backup/restore utilities - **DONE** ([BACKUP_RECOVERY.md](BACKUP_RECOVERY.md))
-11. Full-text search support
+11. ✅ Full-text search support - **DONE** (`db.fts`, see [FULL_TEXT_SEARCH.md](FULL_TEXT_SEARCH.md))
 
 ### Phase 4: Scale & Enterprise (80-120 hours)
 12. ✅ Database sharding framework - **DONE** ([SHARDING.md](SHARDING.md))
@@ -222,9 +222,6 @@ Update `pyproject.toml`:
 # Future dependencies for advanced features
 pooling = [
     "sqlalchemy>=2.0.0"  # For connection pooling
-]
-search = [
-    "whoosh>=2.7.0"  # For full-text search
 ]
 validation = [
     "pydantic>=2.0.0"  # For schema validation

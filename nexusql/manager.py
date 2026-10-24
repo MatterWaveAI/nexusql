@@ -1265,6 +1265,22 @@ class DatabaseManager:
             return self.fetch_one(query, params)
         return await asyncio.to_thread(self.fetch_one, query, params)
 
+    @property
+    def fts(self):
+        """
+        Full-text search helpers for this database; see ``nexusql.fts``.
+
+            db.fts.create_index("articles", ["title", "body"])
+            db.fts.search("articles", ["title", "body"], "indexing")
+
+        Created on first use so managers that never search pay nothing.
+        """
+        helper = getattr(self, '_fts', None)
+        if helper is None:
+            from .fts import FullTextSearch
+            helper = self._fts = FullTextSearch(self)
+        return helper
+
     def create_table(self, table_name: str, schema: str):
         """Create a table with the given schema"""
         query = f"CREATE TABLE IF NOT EXISTS {table_name} ({schema})"

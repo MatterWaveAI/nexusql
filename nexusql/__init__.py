@@ -105,3 +105,15 @@ __all__ += [
     'ChangeDataCapture',
     'AsyncChangeDataCapture',
 ]
+
+# feature/full-text-search
+
+from .fts import (
+    FullTextSearch,
+    AsyncFullTextSearch,
+)
+
+__all__ += [
+    'FullTextSearch',
+    'AsyncFullTextSearch',
+]

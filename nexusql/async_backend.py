@@ -499,3 +499,15 @@ class AsyncPostgresBackend(DatabaseInterface):
             return True
         except Exception:
             return False
+
+    @property
+    def fts(self):
+        """
+        Full-text search helpers, the PostgreSQL branch of ``DatabaseManager.fts``
+        with awaitable methods; see ``nexusql.fts``. Created on first use.
+        """
+        helper = getattr(self, '_fts', None)
+        if helper is None:
+            from .fts import AsyncFullTextSearch
+            helper = self._fts = AsyncFullTextSearch(self)
+        return helper

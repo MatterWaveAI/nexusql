@@ -476,6 +476,28 @@ captured table; log-based capture (logical replication, binlog) is out of
 scope. `AsyncPostgresBackend.cdc` offers the same calls as coroutines. See
 [docs/CHANGE_DATA_CAPTURE.md](docs/CHANGE_DATA_CAPTURE.md) for the per-backend
 DDL and the trade-offs.
+## Full-Text Search
+
+`db.fts` builds a full-text index, runs ranked searches and offers
+completions with one API on every backend: a GIN `tsvector` index on
+PostgreSQL, an FTS5 table kept current by triggers on SQLite, a `FULLTEXT`
+index on MySQL, a full-text catalog and index on SQL Server.
+
+```python
+db.fts.create_index("articles", ["title", "body"])
+
+# The table's rows plus a `rank` column, best first. The query string is
+# user input and only ever reaches the database as a bound parameter.
+hits = db.fts.search("articles", ["title", "body"], "postgres indexing", limit=10)
+
+# Prefix completions; with pg_trgm installed on PostgreSQL, fuzzy ones too.
+words = db.fts.suggest("articles", "title", "postg")
+
+db.fts.drop_index("articles")
+```
+
+`AsyncPostgresBackend.fts` offers the same methods, awaited. Per-backend
+behaviour and limitations are in [docs/FULL_TEXT_SEARCH.md](docs/FULL_TEXT_SEARCH.md).
 
 ## Checking Table Existence
 
@@ -625,6 +647,9 @@ Same as `fetch_one`, run in a worker thread for server backends so it does not b
 
 #### `table_exists(table_name) -> bool`
 Check if table exists.
+
+#### `fts` (property)
+Full-text search helpers: `fts.create_index(table, columns, name=None)`, `fts.drop_index(table, name=None)`, `fts.search(table, columns, query, limit=20, offset=0, name=None) -> List[Dict]` and `fts.suggest(table, column, term, limit=10, install=False) -> List[str]`. See [docs/FULL_TEXT_SEARCH.md](docs/FULL_TEXT_SEARCH.md).
 
 #### `async execute_script(script) -> QueryResult`
 Execute multiple SQL statements.
