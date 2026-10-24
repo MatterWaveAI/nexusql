@@ -69,3 +69,15 @@ __all__ += [
     'MigrationRecord',
     'RollbackStep',
 ]
+
+# feature/test-fixtures
+
+_TESTING_EXPORTS = ('Factory', 'Sequence', 'SubFactory', 'Snapshot', 'snapshot', 'truncate')
+
+__all__ += list(_TESTING_EXPORTS)
+
+def __getattr__(name):
+    if name in _TESTING_EXPORTS:
+        from . import testing
+        return getattr(testing, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
