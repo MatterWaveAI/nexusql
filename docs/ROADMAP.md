@@ -169,7 +169,7 @@ The following features are **not yet implemented** but may be needed for future 
 ### 🟢 Low Priority (Scale & Advanced)
 | Feature | Description | Effort | Priority |
 |---------|-------------|--------|----------|
-| **Sharding/Partitioning** | Horizontal scaling across multiple databases | 20-30h | Low |
+| ~~Sharding/Partitioning~~ | Done: `ShardedDatabaseManager` with key, hash and range routers, single-shard transactions, fan-out reads; see [SHARDING.md](SHARDING.md) | — | Done |
 | **Change Data Capture** | Track all changes for audit/event sourcing | 16-20h | Low |
 | **Encryption/Compliance** | Column-level encryption, PII masking, GDPR | 12-16h | Low |
 | **Query Builder/ORM** | Type-safe query builder for better DX | 16-24h | Low |
@@ -205,7 +205,7 @@ The following features are **not yet implemented** but may be needed for future 
 11. Full-text search support
 
 ### Phase 4: Scale & Enterprise (80-120 hours)
-12. Database sharding framework
+12. ✅ Database sharding framework - **DONE** ([SHARDING.md](SHARDING.md))
 13. Change data capture
 14. Encryption/compliance
 15. Query builder API
