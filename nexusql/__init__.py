@@ -191,3 +191,27 @@ __all__ += [
     'row_security_statements',
     'scoped_name',
 ]
+
+# feature/encryption-compliance
+
+from .crypto import (
+    CRYPTOGRAPHY_AVAILABLE,
+    DecryptionError,
+    FieldEncryptor,
+    KeyRing,
+    blind_index,
+    erase,
+    mask,
+    token_key_id,
+)
+
+__all__ += [
+    'CRYPTOGRAPHY_AVAILABLE',
+    'DecryptionError',
+    'FieldEncryptor',
+    'KeyRing',
+    'blind_index',
+    'erase',
+    'mask',
+    'token_key_id',
+]

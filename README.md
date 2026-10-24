@@ -12,6 +12,7 @@ Multi-database abstraction layer with unified API for PostgreSQL, MySQL, SQLite,
 - ✅ **Async Ready** - Async/await compatible API
 - ✅ **Multi-Tenancy** - `tenant()` + `enable_row_security()`: real row-level security on PostgreSQL, scoped views elsewhere
 - ✅ **Streaming Results** - Walk large result sets in fixed-size chunks with `stream()`
+- ✅ **Encryption & Compliance** - Application-side field encryption, key rotation, blind indexes, masking and GDPR erasure
 - ✅ **Production Ready** - Comprehensive test coverage
 
 ## Installation
@@ -31,6 +32,9 @@ pip install nexusql[mssql]
 
 # With all database drivers
 pip install nexusql[all]
+
+# Application-side field encryption (AES-256-GCM via cryptography)
+pip install nexusql[crypto]
 
 # For development (includes all drivers and testing tools)
 pip install nexusql[dev]
@@ -616,6 +620,40 @@ db.fts.drop_index("articles")
 
 `AsyncPostgresBackend.fts` offers the same methods, awaited. Per-backend
 behaviour and limitations are in [docs/FULL_TEXT_SEARCH.md](docs/FULL_TEXT_SEARCH.md).
+## Encryption and Compliance
+
+`nexusql.crypto` is an explicit toolkit for protecting personal data in the
+application, so the database only ever sees ciphertext. Nothing is applied
+automatically: you choose the columns, encrypt before writing and decrypt
+after reading. Field encryption needs the `crypto` extra; the rest is
+standard library.
+
+```python
+from nexusql import FieldEncryptor, KeyRing, blind_index, mask
+
+enc = FieldEncryptor(os.environ["FIELD_KEY"], key_id="k1")   # AES-256-GCM
+db.execute(
+    "INSERT INTO users (email, email_idx) VALUES (:email, :idx)",
+    {"email": enc.encrypt(email), "idx": blind_index(email, os.environ["INDEX_KEY"])},
+)
+row = db.fetch_one("SELECT email FROM users WHERE email_idx = :idx",
+                   {"idx": blind_index(email, os.environ["INDEX_KEY"])})
+print(enc.decrypt(row["email"]))
+logger.info("signup %s", mask(email, "email"))               # j***@example.com
+```
+
+Tokens look like `v1:k1:<base64url>` so the key id travels with the value;
+a `KeyRing` decrypts with whichever key a token names and `rotate()`
+re-encrypts under the active one. Right-to-erasure requests blank columns
+in place without deleting the row:
+
+```python
+removed = db.erase("users", "id = :id", {"id": 42},
+                   columns=["email", "phone"], tombstone="[erased]")
+```
+
+Threat model, blind-index leakage and the rotation procedure are in
+[docs/ENCRYPTION_COMPLIANCE.md](docs/ENCRYPTION_COMPLIANCE.md).
 
 ## Checking Table Existence
 
@@ -848,6 +886,11 @@ Elsewhere: create a `<table>_scoped` view. See [docs/ROW_LEVEL_SECURITY.md](docs
 
 #### `scoped(table) -> str`
 The name to query: `table` on PostgreSQL, `<table>_scoped` elsewhere.
+#### `erase(table, where, params=None, columns=(), tombstone=None) -> int`
+Set the named columns to NULL (or `tombstone`) for the rows `where` selects,
+inside a transaction, and return the row count. Identifiers are validated and
+quoted; `where` is your SQL with `:name` placeholders. An empty WHERE is
+refused. See [docs/ENCRYPTION_COMPLIANCE.md](docs/ENCRYPTION_COMPLIANCE.md).
 
 #### `async execute_script(script) -> QueryResult`
 Execute multiple SQL statements.

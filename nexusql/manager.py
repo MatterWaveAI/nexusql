@@ -10,6 +10,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Any, Dict, List, TYPE_CHECKING
+from typing import Optional, Any, Dict, List, Sequence
 from .interfaces import ConnectionConfig, DatabaseType, QueryResult
 from .pool import ConnectionPool, GenericPool, NullPool, PostgresPool
 from .schema import ExpectedSchema, SchemaInspector, TableInfo, ValidationReport
@@ -1503,6 +1504,21 @@ class DatabaseManager:
     def invalidate_schema_cache(self, table: Optional[str] = None) -> None:
         """Forget cached introspection for ``table``, or for every table."""
         self._schema.invalidate(table)
+    def erase(self, table: str, where: str, params: Optional[Dict] = None,
+              columns: Sequence[str] = (), tombstone: Optional[str] = None) -> int:
+        """
+        Blank personal-data columns for the rows a WHERE clause selects.
+
+        Sets each named column to NULL (or to ``tombstone``) inside a
+        transaction and returns the number of rows updated. Identifiers are
+        validated and quoted; ``where`` is caller SQL with ``:name``
+        placeholders bound from ``params``. See nexusql.crypto.erase.
+
+            db.erase("users", "id = :id", {"id": 42},
+                     columns=["email", "phone"], tombstone="[erased]")
+        """
+        from .crypto import erase as erase_columns
+        return erase_columns(self, table, where, params, columns, tombstone)
 
     def _split_sql_statements(self, script: str) -> List[str]:
         """
