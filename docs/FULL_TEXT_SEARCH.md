@@ -121,7 +121,10 @@ is `0`. The table needs a single-column, unique, non-nullable key index
 raises `ValueError` otherwise. A catalog named after the index is created
 when missing and dropped with it by `drop_index`.
 
-Full-text DDL cannot run inside a user transaction on SQL Server, so these
+The stock SQL Server container image does not include full-text search;
+`tests/mssql-fts.Dockerfile` adds it, and CI and the local test containers
+are built from that file. Full-text DDL cannot run inside a user transaction
+on SQL Server, so these
 statements run with autocommit on, and calling `create_index` /
 `drop_index` inside `with db.transaction():` raises `RuntimeError`. Index
 population is asynchronous: rows written just now may take a moment to

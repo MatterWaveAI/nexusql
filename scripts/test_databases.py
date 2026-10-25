@@ -25,6 +25,9 @@ SQL Server also needs an ODBC driver on the host: Microsoft's "ODBC Driver
 18 for SQL Server" (winget install Microsoft.msodbcsql.18 on Windows, the
 msodbcsql18 apt/yum package on Linux). The legacy "SQL Server" driver that
 ships with Windows connects but mishandles newer types such as DATETIME2.
+
+The SQL Server image is built from tests/mssql-fts.Dockerfile on first use,
+so it carries the full-text search component the stock image lacks.
 """
 from __future__ import annotations
 
@@ -49,6 +52,9 @@ class Service:
     env_var: str = ""
     # Arguments passed to the image's entrypoint (the server command line).
     args: tuple = ()
+    # Dockerfile (relative to the repo root) to build ``image`` from when it
+    # is not present locally.
+    dockerfile: str = ""
 
     @property
     def container(self) -> str:
@@ -82,7 +88,8 @@ SERVICES = {
     ),
     "mssql": Service(
         name="mssql",
-        image="mcr.microsoft.com/mssql/server:2022-latest",
+        image="localhost/nexusql-test-mssql-fts:2022",
+        dockerfile="tests/mssql-fts.Dockerfile",
         host_port=11433,
         container_port=1433,
         env={"ACCEPT_EULA": "Y", "MSSQL_SA_PASSWORD": "TestPass123!",
@@ -105,6 +112,23 @@ def runtime() -> str:
 
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(list(args), capture_output=True, text=True, check=check)
+
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def image_present(rt: str, image: str) -> bool:
+    return run(rt, "image", "exists", image, check=False).returncode == 0
+
+
+def ensure_image(rt: str, service: Service) -> None:
+    """Build the service's image from its Dockerfile when it is not local."""
+    if not service.dockerfile or image_present(rt, service.image):
+        return
+    print(f"{service.name}: building {service.image} from {service.dockerfile} "
+          f"(a few minutes the first time)")
+    subprocess.run([rt, "build", "-t", service.image, "-f",
+                    os.path.join(REPO_ROOT, service.dockerfile), REPO_ROOT], check=True)
 
 
 def container_state(rt: str, service: Service) -> str | None:
@@ -164,6 +188,7 @@ def up(rt: str, names: list[str], wait: int) -> None:
                   f"else; not starting a container. Point {service.env_var} at it.")
             continue
         else:
+            ensure_image(rt, service)
             args = [rt, "run", "-d", "--name", service.container,
                     "-p", f"127.0.0.1:{service.host_port}:{service.container_port}"]
             for key, value in service.env.items():

@@ -203,7 +203,9 @@ db.execute(
 
 `scripts/test_databases.py` starts one container per backend with podman or
 docker, using the ports and credentials the test defaults expect, waits until
-each server accepts connections, and prints the environment to export. A port
+each server accepts connections, and prints the environment to export. The
+SQL Server image is built from `tests/mssql-fts.Dockerfile` so it carries the
+full-text search component the stock image lacks. A port
 that is already in use is reported rather than fought over. SQL Server also
 needs an ODBC driver on the host (`winget install Microsoft.msodbcsql.18` on
 Windows, `msodbcsql18` on Linux).

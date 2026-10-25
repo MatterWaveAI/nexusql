@@ -46,23 +46,37 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-      mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: Y
-          SA_PASSWORD: TestPass123!
-          MSSQL_PID: Express
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P TestPass123! -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P TestPass123! -Q 'SELECT 1'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
+    # SQL Server is not a service: the stock image lacks the full-text search
+    # component and a service container cannot be changed after it starts, so the
+    # job builds tests/mssql-fts.Dockerfile and runs it itself (see below).
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Build and start SQL Server with full-text search
+      run: |
+        set -euo pipefail
+        docker build -t nexusql-test-mssql-fts:2022 -f tests/mssql-fts.Dockerfile .
+        docker run -d --name nexusql-test-mssql -p 1433:1433 \
+          -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=TestPass123!" -e MSSQL_PID=Express \
+          nexusql-test-mssql-fts:2022
+        # Wait for the server to accept logins; the full-text service starts with it.
+        for i in $(seq 1 30); do
+          if docker exec nexusql-test-mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'TestPass123!' -C -Q "SELECT SERVERPROPERTY('IsFullTextInstalled')" >/dev/null 2>&1; then
+            echo "SQL Server ready after ${i} checks"; break
+          fi
+          sleep 5
+        done
+        docker exec nexusql-test-mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'TestPass123!' -C -Q "SELECT CAST(SERVERPROPERTY('IsFullTextInstalled') AS INT) AS fulltext"
+
+    # The backup tests drive pg_dump/pg_restore for real when the binaries exist and
+    # skip otherwise; make sure they exist so nothing skips here.
+    - name: Ensure PostgreSQL client tools
+      run: |
+        if command -v pg_dump >/dev/null 2>&1; then echo "pg_dump present"; exit 0; fi
+        if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif sudo -n true 2>/dev/null; then SUDO="sudo -n"; else
+          echo "::warning::cannot install postgresql-client without root; pg_dump tests will skip"; exit 0; fi
+        $SUDO apt-get update -qq && $SUDO apt-get install -y --no-install-recommends postgresql-client
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -150,9 +164,10 @@ jobs:
         # lenient behaviour described below.
         NEXUSQL_CI_REQUIRE_BACKENDS: ${{ runner.environment == 'github-hosted' && '1' || '' }}
       run: |
-          # This job declares services: for postgres, mysql and mssql. A runner in
-          # hostexecutor mode ignores them -- it runs on the host, so whatever already
-          # listens on 5432/3306 answers instead, with other credentials. Probe each
+          # This job declares services: for postgres and mysql and starts SQL Server
+          # itself. A runner in hostexecutor mode ignores services -- it runs on the
+          # host, so whatever already listens on 5432/3306 answers instead, with other
+          # credentials. Probe each
           # backend and deselect the ones that are not ours, rather than failing a build
           # over a database that was never started.
           DESELECT=$(python scripts/ci_available_backends.py)

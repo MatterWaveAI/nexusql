@@ -35,7 +35,12 @@ services:
       retries: 10
 
   mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Built rather than pulled: the stock image has no full-text search
+    # component, and the full-text tests skip without it.
+    build:
+      context: ..
+      dockerfile: tests/mssql-fts.Dockerfile
+    image: nexusql-test-mssql-fts:2022
     container_name: nexusql_test_mssql
     environment:
       ACCEPT_EULA: Y
