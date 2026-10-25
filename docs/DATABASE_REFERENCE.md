@@ -199,14 +199,30 @@ db.execute(
 
 ## Testing Guide
 
-### Docker Test Environment
+### Local Test Databases
 
-NexusQL provides a Docker Compose setup for testing against real databases.
+`scripts/test_databases.py` starts one container per backend with podman or
+docker, using the ports and credentials the test defaults expect, waits until
+each server accepts connections, and prints the environment to export. A port
+that is already in use is reported rather than fought over. SQL Server also
+needs an ODBC driver on the host (`winget install Microsoft.msodbcsql.18` on
+Windows, `msodbcsql18` on Linux).
+
+```bash
+python scripts/test_databases.py up            # postgres, mysql and mssql
+python scripts/test_databases.py status        # containers and reachability
+eval "$(python scripts/test_databases.py env)" # TEST_*_URL exports
+python scripts/test_databases.py down
+```
+
+The same services are declared in `tests/docker-compose.test.yml` for Compose
+users and in `.github/workflows/test.yml` for CI, where a GitHub-hosted runner
+fails the job if a declared backend cannot be reached.
 
 #### Setup
 
 ```bash
-# 1. Start test databases
+# 1. Start test databases (or: python scripts/test_databases.py up)
 docker-compose -f tests/docker-compose.test.yml up -d
 
 # 2. Set environment variables (one-liner)

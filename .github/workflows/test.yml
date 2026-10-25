@@ -129,6 +129,11 @@ jobs:
         TEST_POSTGRESQL_URL: "postgresql://postgres:postgres@localhost:5432/nexusql_test"
         TEST_MYSQL_URL: "mysql://testuser:testpass@localhost:3306/nexusql_test"
         TEST_MSSQL_URL: "mssql://sa:TestPass123!@localhost:1433/nexusql_test?TrustServerCertificate=yes"
+        # GitHub-hosted runners really start the services above, so a backend that
+        # cannot be reached there is a broken job, not a topology quirk: the probe
+        # fails the step instead of deselecting. Self-hosted runners keep the
+        # lenient behaviour described below.
+        NEXUSQL_CI_REQUIRE_BACKENDS: ${{ runner.environment == 'github-hosted' && '1' || '' }}
       run: |
           # This job declares services: for postgres, mysql and mssql. A runner in
           # hostexecutor mode ignores them -- it runs on the host, so whatever already

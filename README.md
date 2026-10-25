@@ -1021,10 +1021,19 @@ pytest --cov=nexusql --cov-report=html
 # Run specific test file
 pytest tests/unit/test_database_manager.py -v
 
-# Integration tests run against each backend whose URL is set and skip the rest
-export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test"
+# Integration tests run against each backend whose URL is set and skip the rest.
+# scripts/test_databases.py starts PostgreSQL, MySQL and SQL Server containers
+# (podman or docker) with the credentials the defaults expect and prints the
+# matching exports; without it only the SQLite half of the suite runs.
+python scripts/test_databases.py up
+eval "$(python scripts/test_databases.py env)"
 pytest tests/integration
 ```
+
+SQL Server also needs an ODBC driver on the host (`winget install
+Microsoft.msodbcsql.18` on Windows, the `msodbcsql18` package on Linux). CI
+runs all four backends; on GitHub-hosted runners a declared service that
+cannot be reached fails the job rather than being skipped.
 
 ## Contributing
 
