@@ -1265,12 +1265,16 @@ class DatabaseManager:
                         # SQLite and MySQL return dict-like rows
                         result = [dict(row) for row in rows]
 
-                    if has_returning and not self._in_transaction:
-                        # The write already produced its rows; commit so the
-                        # data is durable rather than discarded when the
-                        # connection returns to the pool. Close the cursor
-                        # first: SQLite will not commit while a statement is
-                        # still in progress.
+                    if not self._in_transaction:
+                        # End the statement's transaction before the
+                        # connection goes back to the pool. For a write with
+                        # RETURNING that makes the rows durable; for a read it
+                        # matters too: psycopg, pymysql and pyodbc all open a
+                        # transaction on the first statement, so a SELECT left
+                        # the connection in-transaction and psycopg_pool rolled
+                        # it back with a warning on every return. Close the
+                        # cursor first: SQLite will not commit while a
+                        # statement is still in progress.
                         cursor.close()
                         conn.commit()
 
@@ -1380,25 +1384,18 @@ class DatabaseManager:
         """Raise if the caller used the removed execute("BEGIN") protocol."""
         reject_transaction_statement(query)
 
-    def _is_write_statement(self, query: str) -> bool:
-        """Check whether a query is a write (DML) statement"""
-        query_upper = query.strip().upper()
-        return (query_upper.startswith('INSERT')
-                or query_upper.startswith('UPDATE')
-                or query_upper.startswith('DELETE')
-                or query_upper.startswith('MERGE')
-                or query_upper.startswith('REPLACE'))
-
-    def _commit_write_if_autocommit(self, query: str, conn):
+    def _end_statement_if_autocommit(self, conn):
         """
-        Commit a write issued through the fetch_* methods.
+        Commit after a statement issued through fetch_one.
 
-        An INSERT .. RETURNING run via fetch_one returns its row
-        without committing, so the write would be discarded when the
-        connection returns to the pool. Inside an explicit transaction the
+        A write such as INSERT .. RETURNING would otherwise be discarded when
+        the connection returns to the pool. A read needs it as well: the
+        drivers open a transaction on the first statement, so a SELECT left
+        the pooled connection in-transaction and psycopg_pool rolled it back
+        with a warning on every return. Inside an explicit transaction the
         caller owns the commit, so this does nothing.
         """
-        if self._in_transaction or not self._is_write_statement(query):
+        if self._in_transaction:
             return
         conn.commit()
 
@@ -1415,7 +1412,7 @@ class DatabaseManager:
             try:
                 cursor = self._execute_raw(query, params, conn)
                 row = cursor.fetchone()
-                self._commit_write_if_autocommit(query, conn)
+                self._end_statement_if_autocommit(conn)
                 if not row:
                     return None
 
