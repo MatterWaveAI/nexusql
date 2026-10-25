@@ -1,16 +1,22 @@
 """
 The nexusql pytest plugin, run through pytester.
 
-The plugin is registered through the pytest11 entry point of an installed
-nexusql, which a source checkout does not have, so each inner session loads
-it explicitly from its conftest the way an uninstalled user would.
+An installed nexusql registers the plugin through its pytest11 entry point;
+a bare source checkout does not. Each inner session's conftest loads the
+plugin by name only in the second case, since registering it twice is an
+error, so the tests pass both from a checkout and from `pip install -e .`.
 """
 
 import pytest
 
 pytest_plugins = ["pytester"]
 
-LOAD_PLUGIN = "pytest_plugins = ['nexusql.testing.pytest_plugin']\n"
+LOAD_PLUGIN = """
+import importlib.metadata as _metadata
+
+if not any(ep.name == "nexusql" for ep in _metadata.entry_points(group="pytest11")):
+    pytest_plugins = ["nexusql.testing.pytest_plugin"]
+"""
 
 
 @pytest.fixture
