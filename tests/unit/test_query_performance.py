@@ -488,18 +488,22 @@ class TestMssqlBranch:
 
     def test_showplan_all_wraps_the_statement(self):
         cursor = FakeCursor([(self.SHOWPLAN_DESC, [
-            ("SELECT * FROM t WHERE id = @P1", 1, 1, None),
-            ("  |--Clustered Index Scan", 1, 2, "Clustered Index Scan"),
+            ("DECLARE @id bigint = 1;", 1, 1, None),
+            ("SELECT * FROM t WHERE id = @id", 2, 1, None),
+            ("  |--Clustered Index Scan", 2, 2, "Clustered Index Scan"),
         ])])
         db = faked("mssql", cursor)
         rows = db.explain("SELECT * FROM t WHERE id = :id", {"id": 1})
-        assert cursor.executed == [
-            "SET SHOWPLAN_ALL ON",
-            ("SELECT * FROM t WHERE id = ?", (1,)),
-            "SET SHOWPLAN_ALL OFF",
-        ]
+        # SHOWPLAN returns nothing for a prepared statement, so the parameter
+        # travels as a declared variable in one unprepared batch.
+        assert cursor.executed[0] == "SET SHOWPLAN_ALL ON"
+        assert cursor.executed[2] == "SET SHOWPLAN_ALL OFF"
+        batch = cursor.executed[1]
+        assert batch.startswith("DECLARE @id bigint = 1;")
+        assert batch.endswith("SELECT * FROM t WHERE id = @id")
+        # The DECLARE line's own plan row is dropped.
         assert [r["plan"] for r in rows] == [
-            "SELECT * FROM t WHERE id = @P1", "  |--Clustered Index Scan"]
+            "SELECT * FROM t WHERE id = @id", "  |--Clustered Index Scan"]
         assert rows[1]["PhysicalOp"] == "Clustered Index Scan"
         assert db._pool.conn.rollbacks == 1
 

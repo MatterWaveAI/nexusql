@@ -22,6 +22,10 @@ services:
       MYSQL_USER: testuser
       MYSQL_PASSWORD: testpass
       MYSQL_DATABASE: nexusql_test
+    # Binary logging is on by default in MySQL 8, and then only SUPER may create
+    # triggers or stored functions; change-data-capture and row-level security
+    # need both.
+    command: --log-bin-trust-function-creators=1
     ports:
       - "13306:3306"  # Changed to avoid conflicts
     healthcheck:

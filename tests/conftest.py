@@ -27,24 +27,28 @@ def sqlite_url(temp_db_path):
 
 
 # PostgreSQL test configuration
+# The defaults below use 127.0.0.1 rather than localhost on purpose: on
+# Windows, localhost resolves to ::1 first, and a container published on
+# 127.0.0.1 leaves every connection waiting about 20 seconds for the IPv6
+# attempt to time out before the IPv4 one succeeds.
 @pytest.fixture
 def postgresql_url():
     """Get PostgreSQL test URL from environment"""
-    return os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@localhost:15432/nexusql_test")
+    return os.getenv("TEST_POSTGRESQL_URL", "postgresql://testuser:testpass@127.0.0.1:15432/nexusql_test")
 
 
 # MySQL test configuration
 @pytest.fixture
 def mysql_url():
     """Get MySQL test URL from environment"""
-    return os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@localhost:13306/nexusql_test")
+    return os.getenv("TEST_MYSQL_URL", "mysql://testuser:testpass@127.0.0.1:13306/nexusql_test")
 
 
 # MSSQL test configuration
 @pytest.fixture
 def mssql_url():
     """Get MSSQL test URL from environment"""
-    return os.getenv("TEST_MSSQL_URL", "mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes")
+    return os.getenv("TEST_MSSQL_URL", "mssql://sa:TestPass123!@127.0.0.1:11433/nexusql_test?TrustServerCertificate=yes")
 
 
 @pytest.fixture
@@ -127,14 +131,49 @@ def ensure_mssql_database_exists(database_url: str) -> None:
     if parsed.query:
         master_url += f"?{parsed.query}"
 
-    master_db = DatabaseManager(master_url)
-    if not master_db.connect():
+    if not create_mssql_database(database_url):
         pytest.skip("MSSQL master database not available")
 
+
+def create_mssql_database(database_url: str) -> bool:
+    """
+    Create the database named in an MSSQL URL if it is missing.
+
+    Returns False when the server's master database cannot be reached.
+    Shared by the fixture above and the collection-time reachability probe:
+    the probe connects to the test database itself, which does not exist on
+    a fresh server, so without this every MSSQL test skipped as unreachable.
+    """
+    from urllib.parse import urlparse
+    from nexusql import DatabaseManager
+
+    parsed = urlparse(database_url)
+    db_name = parsed.path.lstrip('/')
+    if not db_name or db_name.lower() == 'master':
+        return True
+
+    master_url = f"{parsed.scheme}://{parsed.netloc}/master"
+    if parsed.query:
+        master_url += f"?{parsed.query}"
+
+    master_db = DatabaseManager(master_url)
     try:
-        master_db._connection.autocommit = True
-        master_db.execute(f"IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = '{db_name}') CREATE DATABASE {db_name}")
-        master_db._connection.autocommit = False
+        if not master_db.connect():
+            return False
+    except Exception:
+        return False
+    try:
+        # CREATE DATABASE refuses to run inside a transaction, so switch the
+        # borrowed connection to autocommit for the one statement.
+        with master_db._borrow() as conn:
+            conn.autocommit = True
+            try:
+                conn.cursor().execute(
+                    f"IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = '{db_name}') "
+                    f"CREATE DATABASE {db_name}")
+            finally:
+                conn.autocommit = False
+        return True
     finally:
         master_db.disconnect()
 
@@ -195,6 +234,9 @@ def backend_reachable(url: str) -> bool:
     if url in _REACHABLE:
         return _REACHABLE[url]
     from nexusql import DatabaseManager
+    if url.startswith("mssql") and not create_mssql_database(url):
+        _REACHABLE[url] = False
+        return False
     try:
         db = DatabaseManager(url)
         ok = bool(db.connect())
@@ -204,6 +246,30 @@ def backend_reachable(url: str) -> bool:
         ok = False
     _REACHABLE[url] = ok
     return ok
+
+
+def mssql_driver_is_legacy() -> bool:
+    """
+    True when the only SQL Server ODBC driver is the one Windows ships.
+
+    That driver predates DATETIME2 and VARBINARY(MAX) streaming: it returns
+    timestamps as text and cannot write large binary values. The tests that
+    exercise exactly those behaviours skip on it rather than report a
+    library failure; "ODBC Driver 18 for SQL Server" runs them.
+    """
+    try:
+        import pyodbc
+    except ImportError:
+        return False
+    drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
+    return bool(drivers) and not any("ODBC Driver" in d for d in drivers)
+
+
+def skip_if_legacy_mssql_driver(db, reason: str) -> None:
+    """Skip a test running on MSSQL through the legacy driver."""
+    from nexusql import DatabaseType
+    if db.config.database_type == DatabaseType.MSSQL and mssql_driver_is_legacy():
+        pytest.skip(f"legacy 'SQL Server' ODBC driver: {reason}")
 
 
 def skip_unless_reachable(url: str, name: str) -> None:

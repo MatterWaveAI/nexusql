@@ -37,16 +37,11 @@ def table_name() -> str:
 def search(db, table, columns, query, **kw):
     """
     SQL Server populates a full-text index in the background, so a search
-    right after a write can legitimately come back empty for a moment. Poll
-    briefly there; the other engines index synchronously.
+    right after a write can see a partial index. Wait for population first;
+    the other engines index synchronously and return at once.
     """
-    hits = db.fts.search(table, columns, query, **kw)
-    if db.config.database_type == DatabaseType.MSSQL:
-        deadline = time.monotonic() + 15
-        while not hits and time.monotonic() < deadline:
-            time.sleep(0.5)
-            hits = db.fts.search(table, columns, query, **kw)
-    return hits
+    assert db.fts.wait_until_indexed(table, timeout=30), "full-text population timed out"
+    return db.fts.search(table, columns, query, **kw)
 
 
 @pytest.fixture
@@ -60,7 +55,16 @@ def table(db_manager):
             f"INSERT INTO {name} (title, body) VALUES (:title, :body)",
             {"title": title, "body": body},
         )
-    db_manager.fts.create_index(name, ["title", "body"])
+    try:
+        db_manager.fts.create_index(name, ["title", "body"])
+    except RuntimeError as exc:
+        # SQL Server ships full-text search as an optional component; the
+        # stock container image and CI service do not include it.
+        if "full-text search is not installed" not in str(exc):
+            raise
+        db_manager.execute(f"DROP TABLE {name}")
+        pytest.skip(str(exc).split(" (")[0])
+    assert db_manager.fts.wait_until_indexed(name, timeout=30)
     yield name
     for cleanup in (
         lambda: db_manager.fts.drop_index(name),

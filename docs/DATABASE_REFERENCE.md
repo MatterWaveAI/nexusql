@@ -226,12 +226,12 @@ fails the job if a declared backend cannot be reached.
 docker-compose -f tests/docker-compose.test.yml up -d
 
 # 2. Set environment variables (one-liner)
-export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test" TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/nexusql_test" TEST_MSSQL_URL="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes"
+export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@127.0.0.1:15432/nexusql_test" TEST_MYSQL_URL="mysql://testuser:testpass@127.0.0.1:13306/nexusql_test" TEST_MSSQL_URL="mssql://sa:TestPass123!@127.0.0.1:11433/nexusql_test?TrustServerCertificate=yes"
 
 # Or set them separately:
-export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@localhost:15432/nexusql_test"
-export TEST_MYSQL_URL="mysql://testuser:testpass@localhost:13306/nexusql_test"
-export TEST_MSSQL_URL="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes"
+export TEST_POSTGRESQL_URL="postgresql://testuser:testpass@127.0.0.1:15432/nexusql_test"
+export TEST_MYSQL_URL="mysql://testuser:testpass@127.0.0.1:13306/nexusql_test"
+export TEST_MSSQL_URL="mssql://sa:TestPass123!@127.0.0.1:11433/nexusql_test?TrustServerCertificate=yes"
 
 # 3. Run tests
 pytest tests/integration/ -v

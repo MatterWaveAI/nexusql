@@ -278,6 +278,8 @@ class TestBinarySizes:
     @pytest.mark.slow
     def test_1mb_data(self, db_manager):
         """Test 1MB of binary data"""
+        from tests.conftest import skip_if_legacy_mssql_driver
+        skip_if_legacy_mssql_driver(db_manager, "cannot write large VARBINARY(MAX) values")
         test_data = bytes(range(256)) * 4096  # 1MB
 
         db_manager.execute(

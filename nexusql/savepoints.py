@@ -23,18 +23,20 @@ from .interfaces import DatabaseType
 # How a nested transaction() block relates to the one enclosing it.
 NESTED_MODES = ("savepoint", "join")
 
-# Statement that opens the implicit transaction on SQL Server.
-#
-# pyodbc's manual-commit mode runs the session with IMPLICIT_TRANSACTIONS ON,
-# where a transaction starts only when a DML or SELECT statement runs while
-# none is active. SAVE TRANSACTION is not one of those statements and fails
-# with "no active transaction" when the nested block is the first thing the
-# outer block does. An explicit BEGIN TRANSACTION would be worse: in implicit
-# mode it starts two transactions, and the driver's single COMMIT then leaves
-# one open. A SELECT into a variable starts exactly one, returns no result
-# set, and changes nothing.
+# pyodbc in manual-commit mode runs SQL Server with IMPLICIT_TRANSACTIONS ON:
+# a transaction starts when one of a fixed list of statements (INSERT, SELECT
+# from a table, DELETE, ...) runs while none is active. SAVE TRANSACTION is
+# not on that list and fails with "no active transaction" when the nested
+# block is the first thing the outer block does. An explicit BEGIN
+# TRANSACTION would be worse: in implicit mode it starts two transactions,
+# and the driver's single COMMIT then leaves one open. Assigning a variable
+# with SELECT only counts on a brand-new connection; after the first commit
+# or rollback it no longer opens anything (verified against SQL Server 2022).
+# An INSERT into a table variable starts exactly one transaction every time,
+# returns no result set, and touches no real table.
 MSSQL_ENSURE_TRANSACTION = (
-    "IF @@TRANCOUNT = 0 BEGIN DECLARE @nexusql_tx INT; SELECT @nexusql_tx = 1; END"
+    "IF @@TRANCOUNT = 0 BEGIN DECLARE @nexusql_tx TABLE (x INT); "
+    "INSERT INTO @nexusql_tx VALUES (1); END"
 )
 
 

@@ -26,9 +26,13 @@ import re
 import threading
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .interfaces import DatabaseType
+
+# A complete :name token, as manager.PARAM_TOKEN defines it. Repeated here
+# rather than imported because manager imports this module.
+_PARAM_TOKEN = re.compile(r'(?<!:):(\w+)')
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +401,65 @@ def explain(manager, query: str, params: Optional[Dict[str, Any]],
     return with_plan(db_type, rows)
 
 
+def mssql_literal(value: Any) -> Tuple[str, str]:
+    """
+    A T-SQL type and literal for a Python value, for ``mssql_declared_batch``.
+
+    Strings double their quotes, the only escape T-SQL string literals have,
+    and bytes become a hex constant, so no value can close its literal.
+    """
+    import datetime
+    import decimal
+    import uuid
+
+    if value is None:
+        return 'nvarchar(max)', 'NULL'
+    if isinstance(value, bool):
+        return 'bit', '1' if value else '0'
+    if isinstance(value, int):
+        return 'bigint', str(value)
+    if isinstance(value, float):
+        return 'float', repr(value)
+    if isinstance(value, decimal.Decimal):
+        return 'decimal(38, 10)', str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return 'varbinary(max)', '0x' + bytes(value).hex()
+    if isinstance(value, uuid.UUID):
+        return 'uniqueidentifier', f"'{value}'"
+    if isinstance(value, datetime.datetime):
+        return 'datetime2', f"'{value.isoformat(sep=' ')}'"
+    if isinstance(value, datetime.date):
+        return 'date', f"'{value.isoformat()}'"
+    if isinstance(value, datetime.time):
+        return 'time', f"'{value.isoformat()}'"
+    text = str(value).replace("'", "''")
+    return 'nvarchar(max)', f"N'{text}'"
+
+
+def mssql_declared_batch(translated: str, params: Dict[str, Any]) -> str:
+    """
+    One batch that declares each ``:name`` as a T-SQL variable and then runs
+    the statement against those variables.
+
+    SHOWPLAN never returns a plan for a prepared, parameterised statement:
+    pyodbc sends those through sp_prepexec and the server answers with no
+    result set at all. Variables declared in the same batch give the planner
+    the same shape of statement without preparing it, and without executing
+    anything, since SHOWPLAN is on for the connection. Variable types follow
+    the Python values, so a plan can differ from the real statement's where
+    a column type would have been narrower; that is an estimate's trade-off.
+    """
+    declared = []
+    for name, value in params.items():
+        sql_type, literal = mssql_literal(value)
+        declared.append(f"@{name} {sql_type} = {literal}")
+    body = _PARAM_TOKEN.sub(
+        lambda m: f"@{m.group(1)}" if m.group(1) in params else m.group(0),
+        translated,
+    )
+    return "DECLARE " + ", ".join(declared) + ";" + chr(10) + body
+
+
 def _explain_mssql(manager, conn, query: str, params, analyze: bool) -> List[Dict[str, Any]]:
     """
     SQL Server plans come from a session setting, not a statement prefix.
@@ -407,6 +470,10 @@ def _explain_mssql(manager, conn, query: str, params, analyze: bool) -> List[Dic
     set. Both are session-wide, so the setting is switched off again on the
     same connection whatever happens, or every later statement on that
     pooled connection would come back as a plan.
+
+    Under SHOWPLAN a parameterised statement is sent as a plain batch with
+    the parameters declared as variables (``mssql_declared_batch``), because
+    the prepared form produces no plan rows.
     """
     setting = 'STATISTICS XML' if analyze else 'SHOWPLAN_ALL'
     control = conn.cursor()
@@ -415,11 +482,19 @@ def _explain_mssql(manager, conn, query: str, params, analyze: bool) -> List[Dic
     finally:
         control.close()
     try:
-        cursor = manager._execute_raw(query, params, conn)
+        if analyze or not params:
+            cursor = manager._execute_raw(query, params, conn)
+        else:
+            cursor = conn.cursor()
+            cursor.execute(mssql_declared_batch(manager._translate_sql(query), params))
         try:
             if analyze:
                 return _mssql_showplan_sets(cursor)
-            return _fetch_dicts(cursor)
+            rows = _fetch_dicts(cursor)
+            # The DECLARE line gets a plan row of its own; it is not part of
+            # the caller's statement.
+            return [r for r in rows
+                    if not str(r.get('StmtText', '')).lstrip().upper().startswith('DECLARE @')]
         finally:
             cursor.close()
     finally:

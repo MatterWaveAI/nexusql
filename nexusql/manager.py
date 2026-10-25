@@ -655,6 +655,14 @@ class DatabaseManager:
 
             if not driver:
                 raise RuntimeError("No MSSQL ODBC driver found. Install ODBC Driver 17 or 18 for SQL Server")
+            if driver == 'SQL Server':
+                # The driver Windows ships predates DATETIME2 and VARBINARY(MAX)
+                # streaming: timestamps come back as text and writes of large
+                # binary values fail. It connects, so allow it, but say so.
+                logger.warning(
+                    "Using the legacy 'SQL Server' ODBC driver: DATETIME2 values are "
+                    "returned as strings and large VARBINARY(MAX) writes fail. "
+                    "Install 'ODBC Driver 18 for SQL Server' for full support.")
 
             # Build ODBC connection string
             conn_str_parts = [

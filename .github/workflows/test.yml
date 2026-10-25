@@ -124,6 +124,21 @@ jobs:
       if: env.MSSQL_DRIVER == 'absent'
       run: echo "::notice::msodbcsql18 unavailable on this runner; MSSQL tests deselected." 
 
+    # Service containers take no command-line arguments, so the mysqld flag the
+    # local containers get (--log-bin-trust-function-creators=1) is set here as a
+    # global instead. Without it MySQL 8 refuses trigger and function creation to a
+    # user without SUPER while binary logging is on, which change-data-capture and
+    # row-level security need.
+    - name: Allow MySQL trigger and function creation
+      run: |
+        python - <<'EOF'
+        import pymysql
+        conn = pymysql.connect(host="localhost", port=3306, user="root", password="rootpass")
+        conn.cursor().execute("SET GLOBAL log_bin_trust_function_creators = 1")
+        conn.close()
+        print("log_bin_trust_function_creators = 1")
+        EOF
+
     - name: Run integration tests (All Databases)
       env:
         TEST_POSTGRESQL_URL: "postgresql://postgres:postgres@localhost:5432/nexusql_test"

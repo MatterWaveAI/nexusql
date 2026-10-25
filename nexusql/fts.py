@@ -28,6 +28,7 @@ Design notes
 """
 
 import re
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .interfaces import DatabaseType
@@ -72,6 +73,15 @@ MSSQL_KEY_INDEX_SQL = """
 """
 
 MSSQL_CATALOG_EXISTS_SQL = "SELECT 1 AS present FROM sys.fulltext_catalogs WHERE name = :name"
+
+# Population state of a table's full-text index: status 0 is idle, and the
+# pending count is the change-tracking backlog still to be indexed.
+MSSQL_POPULATE_STATUS_SQL = (
+    # CAST because OBJECTPROPERTYEX returns sql_variant, which ODBC drivers
+    # (the legacy one in particular) cannot deliver to pyodbc.
+    "SELECT CAST(OBJECTPROPERTYEX(OBJECT_ID(:table), 'TableFulltextPopulateStatus') AS INT) AS status, "
+    "CAST(OBJECTPROPERTYEX(OBJECT_ID(:table), 'TableFulltextPendingChanges') AS INT) AS pending"
+)
 
 SQLITE_COLUMNS_SQL = "SELECT name, type, pk FROM pragma_table_info(:table)"
 
@@ -441,6 +451,29 @@ class FullTextSearch:
         else:
             raise NotImplementedError(f"Full-text search is not supported on {db_type}")
 
+    def wait_until_indexed(self, table: str, timeout: float = 30.0,
+                           poll: float = 0.25) -> bool:
+        """
+        Block until the full-text index on ``table`` has caught up with its
+        rows; True once it has, False if ``timeout`` seconds pass first.
+
+        SQL Server populates a full-text index in the background, so a
+        ``search()`` right after ``create_index()`` or a write can see a
+        partial index. The other engines index synchronously and return at
+        once.
+        """
+        if self._db_type != DatabaseType.MSSQL:
+            return True
+        table = validate_identifier(table, "table name")
+        deadline = time.monotonic() + timeout
+        while True:
+            row = self._db.fetch_one(MSSQL_POPULATE_STATUS_SQL, {"table": table})
+            if row and row.get("status") == 0 and not row.get("pending"):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll)
+
     # -- querying ------------------------------------------------------------
 
     def search(self, table: str, columns: Sequence[str], query: str,
@@ -621,6 +654,12 @@ class AsyncFullTextSearch:
         name = _index_name(table, name)
         for sql in pg_drop_index_sql(name):
             await self._backend.execute(sql)
+
+    async def wait_until_indexed(self, table: str, timeout: float = 30.0,
+                                 poll: float = 0.25) -> bool:
+        """PostgreSQL indexes synchronously; kept for API parity with FullTextSearch."""
+        validate_identifier(table, "table name")
+        return True
 
     async def search(self, table: str, columns: Sequence[str], query: str,
                      limit: int = 20, offset: int = 0, name: Optional[str] = None) -> List[Dict]:

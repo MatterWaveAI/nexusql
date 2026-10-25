@@ -125,9 +125,11 @@ Full-text DDL cannot run inside a user transaction on SQL Server, so these
 statements run with autocommit on, and calling `create_index` /
 `drop_index` inside `with db.transaction():` raises `RuntimeError`. Index
 population is asynchronous: rows written just now may take a moment to
-become searchable, and `search()` right after `create_index` may briefly
-return nothing. `suggest()` on SQL Server also escapes `[`, which its `LIKE`
-treats as a wildcard.
+become searchable, and `search()` right after `create_index` may see a
+partial index. `db.fts.wait_until_indexed(table, timeout=30)` blocks until
+the index has caught up (it returns at once on the other engines, which
+index synchronously). `suggest()` on SQL Server also escapes `[`, which its
+`LIKE` treats as a wildcard.
 
 ## Safety
 

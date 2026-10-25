@@ -47,6 +47,8 @@ class Service:
     env: dict = field(default_factory=dict)
     url: str = ""
     env_var: str = ""
+    # Arguments passed to the image's entrypoint (the server command line).
+    args: tuple = ()
 
     @property
     def container(self) -> str:
@@ -61,7 +63,7 @@ SERVICES = {
         container_port=5432,
         env={"POSTGRES_USER": "testuser", "POSTGRES_PASSWORD": "testpass",
              "POSTGRES_DB": "nexusql_test"},
-        url="postgresql://testuser:testpass@localhost:15432/nexusql_test",
+        url="postgresql://testuser:testpass@127.0.0.1:15432/nexusql_test",
         env_var="TEST_POSTGRESQL_URL",
     ),
     "mysql": Service(
@@ -71,8 +73,12 @@ SERVICES = {
         container_port=3306,
         env={"MYSQL_ROOT_PASSWORD": "rootpass", "MYSQL_USER": "testuser",
              "MYSQL_PASSWORD": "testpass", "MYSQL_DATABASE": "nexusql_test"},
-        url="mysql://testuser:testpass@localhost:13306/nexusql_test",
+        url="mysql://testuser:testpass@127.0.0.1:13306/nexusql_test",
         env_var="TEST_MYSQL_URL",
+        # MySQL 8 enables binary logging by default and then refuses to let a
+        # user without SUPER create triggers or stored functions, which the
+        # change-data-capture and row-level-security features need.
+        args=("--log-bin-trust-function-creators=1",),
     ),
     "mssql": Service(
         name="mssql",
@@ -81,7 +87,7 @@ SERVICES = {
         container_port=1433,
         env={"ACCEPT_EULA": "Y", "MSSQL_SA_PASSWORD": "TestPass123!",
              "MSSQL_PID": "Express"},
-        url="mssql://sa:TestPass123!@localhost:11433/master?TrustServerCertificate=yes",
+        url="mssql://sa:TestPass123!@127.0.0.1:11433/nexusql_test?TrustServerCertificate=yes",
         env_var="TEST_MSSQL_URL",
     ),
 }
@@ -163,6 +169,7 @@ def up(rt: str, names: list[str], wait: int) -> None:
             for key, value in service.env.items():
                 args += ["-e", f"{key}={value}"]
             args.append(service.image)
+            args.extend(service.args)
             run(*args)
             print(f"{service.container}: created")
 

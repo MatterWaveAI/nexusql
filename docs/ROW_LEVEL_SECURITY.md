@@ -149,7 +149,9 @@ Backend notes:
 - **MySQL** views cannot reference user variables directly, so the first
   `enable_row_security()` in a schema creates a stored function
   `nexusql_tenant_id()` (`DETERMINISTIC NO SQL`, returning
-  `@app_tenant_id`). Creating it needs the `CREATE ROUTINE` privilege.
+  `@app_tenant_id`). Creating it needs the `CREATE ROUTINE` privilege and,
+  while binary logging is on (the MySQL 8 default), either `SUPER` or
+  `log_bin_trust_function_creators = 1` on the server.
   `disable_row_security()` leaves the function in place, since other views
   may use it.
 - **SQL Server**'s `SESSION_CONTEXT` persists for the connection, so the

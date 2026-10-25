@@ -269,7 +269,10 @@ class TestMysqlFake:
         statements = [sql for sql, _ in ddl]
         assert statements == enable_statements(
             DatabaseType.MYSQL, "orders", "id", ["id", "name", "qty"])
-        assert conn.commits == 1
+        # Two commits: one ends the catalog read that lists the columns (reads
+        # outside a transaction commit so the connection goes back idle), one
+        # is the DDL transaction.
+        assert conn.commits == 2
 
     def test_generated_ddl(self):
         statements = enable_statements(DatabaseType.MYSQL, "orders", "id", ["id", "name"])
@@ -319,7 +322,10 @@ class TestMssqlFake:
         assert statements == enable_statements(DatabaseType.MSSQL, "orders", "id", ["id", "name"])
         # CREATE TRIGGER must be alone in its batch: one execute per statement.
         assert sum(s.startswith("CREATE TRIGGER") for s in statements) == 3
-        assert conn.commits == 1
+        # Two commits: one ends the catalog read that lists the columns (reads
+        # outside a transaction commit so the connection goes back idle), one
+        # is the DDL transaction.
+        assert conn.commits == 2
 
     def test_generated_ddl(self):
         statements = enable_statements(DatabaseType.MSSQL, "orders", "id", ["id", "name"])

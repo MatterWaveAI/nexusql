@@ -466,6 +466,8 @@ class TestDataVerification:
 
     def test_timestamp_storage(self, db_manager):
         """Verify timestamp handling"""
+        from tests.conftest import skip_if_legacy_mssql_driver
+        skip_if_legacy_mssql_driver(db_manager, "returns DATETIME2 as text")
         self._create_users_table(db_manager)
 
         db_manager.execute(
