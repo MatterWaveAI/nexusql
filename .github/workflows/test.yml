@@ -17,66 +17,23 @@ jobs:
         python-version: ["3.11"]
       fail-fast: false
 
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: nexusql_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: rootpass
-          MYSQL_USER: testuser
-          MYSQL_PASSWORD: testpass
-          MYSQL_DATABASE: nexusql_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost -u testuser -ptestpass"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
-    # SQL Server is not a service: the stock image lacks the full-text search
-    # component and a service container cannot be changed after it starts, so the
-    # job builds tests/mssql-fts.Dockerfile and runs it itself (see below).
-
+    # No services: block. The databases come from scripts/test_databases.py, the
+    # same script a developer runs locally, so CI and a laptop get identical
+    # servers (PostgreSQL 16, MySQL 8 with log_bin_trust_function_creators, and
+    # SQL Server 2022 built from tests/mssql-fts.Dockerfile so full-text search is
+    # present). Service containers could not do that: they cannot be built from a
+    # Dockerfile or given server arguments.
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build and start SQL Server with full-text search
-      run: |
-        set -euo pipefail
-        docker build -t nexusql-test-mssql-fts:2022 -f tests/mssql-fts.Dockerfile .
-        docker run -d --name nexusql-test-mssql -p 1433:1433 \
-          -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=TestPass123!" -e MSSQL_PID=Express \
-          nexusql-test-mssql-fts:2022
-        # Wait for the server to accept logins; the full-text service starts with it.
-        for i in $(seq 1 30); do
-          if docker exec nexusql-test-mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'TestPass123!' -C -Q "SELECT SERVERPROPERTY('IsFullTextInstalled')" >/dev/null 2>&1; then
-            echo "SQL Server ready after ${i} checks"; break
-          fi
-          sleep 5
-        done
-        docker exec nexusql-test-mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'TestPass123!' -C -Q "SELECT CAST(SERVERPROPERTY('IsFullTextInstalled') AS INT) AS fulltext"
-
-    # The backup tests drive pg_dump/pg_restore for real when the binaries exist and
-    # skip otherwise; make sure they exist so nothing skips here.
-    - name: Ensure PostgreSQL client tools
-      run: |
-        if command -v pg_dump >/dev/null 2>&1; then echo "pg_dump present"; exit 0; fi
-        if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif sudo -n true 2>/dev/null; then SUDO="sudo -n"; else
-          echo "::warning::cannot install postgresql-client without root; pg_dump tests will skip"; exit 0; fi
-        $SUDO apt-get update -qq && $SUDO apt-get install -y --no-install-recommends postgresql-client
+    # Started first and not waited for, so the SQL Server image build and the
+    # server start-ups overlap with the Python setup below. A runner without a
+    # container runtime fails this step harmlessly; the probe before the
+    # integration tests decides what that means (fail on GitHub-hosted, deselect
+    # on self-hosted).
+    - name: Start test databases
+      continue-on-error: true
+      run: python3 scripts/test_databases.py up --no-wait
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -84,48 +41,49 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    # Self-hosted runners have no passwordless sudo: the old version of this step
-    # called `sudo apt-key add` and blocked on a password prompt until the job hit
-    # its 44-minute timeout. `apt-key` is also deprecated and gone from recent
-    # Ubuntu. Skip the install if the driver is already there, use a keyring file
-    # instead of apt-key, and never prompt.
-    - name: Install ODBC Driver for SQL Server (for MSSQL)
+    # Host-side client libraries the drivers need: Microsoft's ODBC driver for
+    # pyodbc, and pg_dump/pg_restore for the live backup tests. Self-hosted
+    # runners have no passwordless sudo: use it only when present and never
+    # prompt (-n fails fast). apt-key is deprecated, so a keyring file is used.
+    - name: Install database client libraries
       timeout-minutes: 5
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         set -euo pipefail
-
-        if [ -f /opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.so ]            || odbcinst -q -d 2>/dev/null | grep -q 'ODBC Driver 18'; then
-          echo "msodbcsql18 already present; skipping install"
-          exit 0
-        fi
-
-        # No sudo on a self-hosted runner that runs as root; use it only when present
-        # and non-interactive. -n makes sudo fail fast instead of prompting.
         if [ "$(id -u)" -eq 0 ]; then SUDO=""
         elif sudo -n true 2>/dev/null; then SUDO="sudo -n"
-        else
-          echo "::warning::No root and no passwordless sudo -- cannot install msodbcsql18."
-          echo "MSSQL tests will be skipped. To run them, pre-install msodbcsql18 on this"
-          echo "runner or run this job in a container with the driver baked in."
+        else SUDO="none"; fi
+
+        if [ -f /opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.so ] \
+           || odbcinst -q -d 2>/dev/null | grep -q 'ODBC Driver 18'; then
+          echo "msodbcsql18 already present"
+        elif [ "$SUDO" = "none" ]; then
+          echo "::warning::No root and no passwordless sudo -- cannot install msodbcsql18; MSSQL tests will be skipped."
           echo "MSSQL_DRIVER=absent" >> "$GITHUB_ENV"
-          exit 0
+        else
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | gpg --dearmor | $SUDO tee /usr/share/keyrings/microsoft-prod.gpg > /dev/null
+          . /etc/os-release
+          echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${VERSION_ID}/prod ${VERSION_CODENAME} main" \
+            | $SUDO tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          $SUDO apt-get update -qq
+          $SUDO ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev
         fi
 
-        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc           | gpg --dearmor           | $SUDO tee /usr/share/keyrings/microsoft-prod.gpg > /dev/null
-
-        . /etc/os-release
-        echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${VERSION_ID}/prod ${VERSION_CODENAME} main"           | $SUDO tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
-
-        $SUDO apt-get update -qq
-        $SUDO ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev
+        if command -v pg_dump >/dev/null 2>&1; then
+          echo "pg_dump present"
+        elif [ "$SUDO" = "none" ]; then
+          echo "::warning::cannot install postgresql-client without root; pg_dump tests will skip"
+        else
+          $SUDO apt-get update -qq
+          $SUDO apt-get install -y --no-install-recommends postgresql-client
+        fi
 
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
-
 
     - name: Run unit tests
       run: |
@@ -136,38 +94,27 @@ jobs:
     # failing the build -- a missing optional driver is not a broken library.
     - name: Note skipped MSSQL tests
       if: env.MSSQL_DRIVER == 'absent'
-      run: echo "::notice::msodbcsql18 unavailable on this runner; MSSQL tests deselected." 
+      run: echo "::notice::msodbcsql18 unavailable on this runner; MSSQL tests deselected."
 
-    # Service containers take no command-line arguments, so the mysqld flag the
-    # local containers get (--log-bin-trust-function-creators=1) is set here as a
-    # global instead. Without it MySQL 8 refuses trigger and function creation to a
-    # user without SUPER while binary logging is on, which change-data-capture and
-    # row-level security need.
-    - name: Allow MySQL trigger and function creation
+    # Idempotent: the containers are already up, this waits until each server
+    # accepts a driver connection, then exports the TEST_*_URL variables the
+    # suite reads.
+    - name: Wait for test databases
+      continue-on-error: true
       run: |
-        python - <<'EOF'
-        import pymysql
-        conn = pymysql.connect(host="localhost", port=3306, user="root", password="rootpass")
-        conn.cursor().execute("SET GLOBAL log_bin_trust_function_creators = 1")
-        conn.close()
-        print("log_bin_trust_function_creators = 1")
-        EOF
+        python scripts/test_databases.py up --wait 300
+        python scripts/test_databases.py env --plain >> "$GITHUB_ENV"
 
     - name: Run integration tests (All Databases)
       env:
-        TEST_POSTGRESQL_URL: "postgresql://postgres:postgres@localhost:5432/nexusql_test"
-        TEST_MYSQL_URL: "mysql://testuser:testpass@localhost:3306/nexusql_test"
-        TEST_MSSQL_URL: "mssql://sa:TestPass123!@localhost:1433/nexusql_test?TrustServerCertificate=yes"
-        # GitHub-hosted runners really start the services above, so a backend that
+        # GitHub-hosted runners really start the containers above, so a backend that
         # cannot be reached there is a broken job, not a topology quirk: the probe
         # fails the step instead of deselecting. Self-hosted runners keep the
         # lenient behaviour described below.
         NEXUSQL_CI_REQUIRE_BACKENDS: ${{ runner.environment == 'github-hosted' && '1' || '' }}
       run: |
-          # This job declares services: for postgres and mysql and starts SQL Server
-          # itself. A runner in hostexecutor mode ignores services -- it runs on the
-          # host, so whatever already listens on 5432/3306 answers instead, with other
-          # credentials. Probe each
+          # A self-hosted runner may have no container runtime, or something else may
+          # already listen on the test ports with other credentials. Probe each
           # backend and deselect the ones that are not ours, rather than failing a build
           # over a database that was never started.
           DESELECT=$(python scripts/ci_available_backends.py)

@@ -15,7 +15,12 @@ overrides the choice).
     python scripts/test_databases.py status        # containers + reachability
     python scripts/test_databases.py env           # export lines for your shell
     python scripts/test_databases.py env --powershell
+    python scripts/test_databases.py env --plain   # KEY=VALUE, e.g. for $GITHUB_ENV
     python scripts/test_databases.py down          # stop and remove
+
+`up --no-wait` starts the containers and returns at once; a later `up`
+(idempotent) waits for them. CI uses that to overlap the SQL Server image
+build with its own setup.
 
 A port that is already bound by something else (for example another test
 Postgres) is left alone and reported, since the suite can point at it
@@ -198,6 +203,8 @@ def up(rt: str, names: list[str], wait: int) -> None:
             run(*args)
             print(f"{service.container}: created")
 
+    if wait <= 0:
+        return
     deadline = time.monotonic() + wait
     pending = [SERVICES[n] for n in names if container_state(rt, SERVICES[n]) == "running"]
     while pending and time.monotonic() < deadline:
@@ -235,10 +242,12 @@ def status(rt: str, names: list[str]) -> None:
               f"reachable={'yes' if ok else 'no'}  {detail if not ok else ''}".rstrip())
 
 
-def env(names: list[str], powershell: bool) -> None:
+def env(names: list[str], powershell: bool, plain: bool) -> None:
     for name in names:
         service = SERVICES[name]
-        if powershell:
+        if plain:
+            print(f"{service.env_var}={service.url}")
+        elif powershell:
             print(f'$env:{service.env_var} = "{service.url}"')
         else:
             print(f'export {service.env_var}="{service.url}"')
@@ -253,15 +262,19 @@ def main() -> None:
                         help="seconds to wait for servers to accept connections")
     parser.add_argument("--powershell", action="store_true",
                         help="env: print PowerShell assignments instead of exports")
+    parser.add_argument("--plain", action="store_true",
+                        help="env: print KEY=VALUE lines (GitHub Actions $GITHUB_ENV)")
+    parser.add_argument("--no-wait", action="store_true",
+                        help="up: start the containers and return without waiting")
     args = parser.parse_args()
     names = args.services or list(SERVICES)
 
     if args.command == "env":
-        env(names, args.powershell)
+        env(names, args.powershell, args.plain)
         return
     rt = runtime()
     if args.command == "up":
-        up(rt, names, args.wait)
+        up(rt, names, 0 if args.no_wait else args.wait)
     elif args.command == "down":
         down(rt, names)
     else:

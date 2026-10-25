@@ -217,9 +217,10 @@ eval "$(python scripts/test_databases.py env)" # TEST_*_URL exports
 python scripts/test_databases.py down
 ```
 
-The same services are declared in `tests/docker-compose.test.yml` for Compose
-users and in `.github/workflows/test.yml` for CI, where a GitHub-hosted runner
-fails the job if a declared backend cannot be reached.
+CI runs the same script (`.github/workflows/test.yml`), so the servers it tests
+against are identical to the local ones; on a GitHub-hosted runner the job fails
+if any of them cannot be reached. `tests/docker-compose.test.yml` declares the
+same three services for Compose users.
 
 #### Setup
 
